@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<body>
+  <div id="capture" style="color: oklch(0.5 0.2 200); background-color: oklch(0.9 0.1 200); padding: 50px;">
+    Hello World
+  </div>
+  <script src="node_modules/html2canvas/dist/html2canvas.js"></script>
+  <script>
+    html2canvas(document.querySelector("#capture")).then(canvas => {
+      console.log("Success!");
+    }).catch(e => {
+      console.error("Error:", e);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,163 @@
+{
+  "entities": {
+    "referenceDocument": {
+      "title": "ReferenceDocument",
+      "description": "Canonical demo reference identity document record for border screening verification",
+      "type": "object",
+      "properties": {
+        "referenceDocumentId": {
+          "type": "string",
+          "description": "Stable unique canonical identifier for the demo reference document",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "maxLength": 128
+        },
+        "documentType": {
+          "type": "string",
+          "description": "Standardized category of the identity document",
+          "enum": [
+            "PASSPORT",
+            "VISA",
+            "NATIONAL_ID",
+            "DRIVING_LICENSE",
+            "PERMIT",
+            "TRAVEL_AUTHORIZATION",
+            "UNKNOWN"
+          ]
+        },
+        "displayName": {
+          "type": "string",
+          "description": "Human-readable label or document title",
+          "maxLength": 200
+        },
+        "imageUrl": {
+          "type": "string",
+          "description": "Firebase Storage or accessible URL of the reference document image",
+          "maxLength": 2048
+        },
+        "extractedFields": {
+          "type": "object",
+          "description": "Structured key-value field extractions from OCR and AI analysis"
+        },
+        "extractedText": {
+          "type": "string",
+          "description": "Raw full OCR text extracted from the document",
+          "maxLength": 10000
+        },
+        "normalizedFields": {
+          "type": "object",
+          "description": "Standardized uppercase normalized tokens for cross-field comparison"
+        },
+        "imageHash": {
+          "type": "string",
+          "description": "SHA-256 or perceptual fingerprint hash for visual deduplication",
+          "maxLength": 128
+        },
+        "sourceType": {
+          "type": "string",
+          "description": "Dataset provenance identifier",
+          "maxLength": 64
+        },
+        "verificationMode": {
+          "type": "string",
+          "description": "Verification engine mode indicator",
+          "maxLength": 64
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp or server timestamp of creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp or server timestamp of last modification"
+        }
+      },
+      "required": [
+        "referenceDocumentId",
+        "documentType",
+        "displayName",
+        "imageUrl",
+        "extractedFields",
+        "extractedText",
+        "normalizedFields",
+        "imageHash",
+        "sourceType",
+        "verificationMode"
+      ]
+    },
+    "screeningRecord": {
+      "title": "ScreeningRecord",
+      "description": "Border checkpoint identity screening case record evaluated by AI forensics",
+      "type": "object",
+      "properties": {
+        "caseId": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "maxLength": 128
+        },
+        "timestamp": { "type": "string" },
+        "person": { "type": "object" },
+        "document": { "type": "object" },
+        "aiScore": { "type": "number" },
+        "riskScore": { "type": "number" },
+        "riskLevel": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+        "status": { "type": "string", "enum": ["verified", "suspicious", "rejected", "manual_review"] },
+        "screeningTimeSeconds": { "type": "number" },
+        "officer": { "type": "string" },
+        "checkpoint": { "type": "string" },
+        "findings": { "type": "array" },
+        "pipelineResults": { "type": "object" },
+        "comparisonData": { "type": "array" },
+        "verificationSource": { "type": "string" },
+        "officerNotes": { "type": "string" }
+      },
+      "required": ["caseId", "person", "document", "aiScore", "riskScore", "riskLevel", "status"]
+    },
+    "screeningReport": {
+      "title": "ScreeningReport",
+      "description": "Official immutable screening certificate report document",
+      "type": "object",
+      "properties": {
+        "reportId": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "maxLength": 128 },
+        "caseId": { "type": "string" },
+        "generatedAt": { "type": "string" },
+        "officerName": { "type": "string" },
+        "digitalSignature": { "type": "string" },
+        "summary": { "type": "object" },
+        "verificationMode": { "type": "string" }
+      },
+      "required": ["reportId", "caseId", "generatedAt", "digitalSignature"]
+    },
+    "auditLog": {
+      "title": "AuditLog",
+      "description": "Immutable security and audit event log for officer and AI system actions",
+      "type": "object",
+      "properties": {
+        "logId": { "type": "string", "pattern": "^[a-zA-Z0-9_-]+$", "maxLength": 128 },
+        "action": { "type": "string" },
+        "officer": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "details": { "type": "object" },
+        "severity": { "type": "string", "enum": ["info", "warning", "critical"] }
+      },
+      "required": ["logId", "action", "timestamp", "severity"]
+    }
+  },
+  "firestore": {
+    "/referenceDocuments/{docId}": {
+      "schema": "referenceDocument",
+      "description": "Collection of verified reference documents used for fingerprint cross-referencing and tamper detection"
+    },
+    "/screeningRecords/{caseId}": {
+      "schema": "screeningRecord",
+      "description": "Real-time border checkpoint screening cases and AI forensic outcomes"
+    },
+    "/reports/{reportId}": {
+      "schema": "screeningReport",
+      "description": "Official screening reports and digital certificates"
+    },
+    "/auditLogs/{logId}": {
+      "schema": "auditLog",
+      "description": "Audit trail of screening decisions, manual overrides, and verification queries"
+    }
+  }
+}
