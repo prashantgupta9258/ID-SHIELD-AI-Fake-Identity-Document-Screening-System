@@ -124,63 +124,25 @@ export function getRiskBandInfo(score: number): {
 } {
   const clampedScore = Math.max(0, Math.min(100, Math.round(score)));
 
+  // Strict Binary Decision: Only Perfect Match passes, any anomaly or mismatch is rejected
   if (clampedScore <= 20) {
     return {
-      band: 'LOW RISK',
+      band: 'PERFECT MATCH (PASSED)',
       level: 'low',
-      recommendedAction: 'STANDARD CLEARANCE',
-      actionGuidance: 'Automated biometric clearance and standard e-Gate passage recommended. No document anomalies flagged.',
+      recommendedAction: 'STANDARD CLEARANCE (100% MATCH)',
+      actionGuidance: 'Identity credentials (Full Name, Document Number, Date of Birth, Gender) and biometric portrait match the authorized database record. 100% perfect match confirmed.',
       badgeBg: 'bg-emerald-50',
-      badgeBorder: 'border-emerald-200',
+      badgeBorder: 'border-emerald-300',
       badgeText: 'text-emerald-800',
       accentColor: '#10b981',
     };
   }
 
-  if (clampedScore <= 40) {
-    return {
-      band: 'MODERATE-LOW RISK',
-      level: 'moderate_low',
-      recommendedAction: 'ROUTINE VERIFICATION',
-      actionGuidance: 'Standard visual credential check at primary officer counter. Minor benign variance within tolerance.',
-      badgeBg: 'bg-blue-50',
-      badgeBorder: 'border-blue-200',
-      badgeText: 'text-blue-800',
-      accentColor: '#3b82f6',
-    };
-  }
-
-  if (clampedScore <= 60) {
-    return {
-      band: 'MEDIUM RISK',
-      level: 'medium',
-      recommendedAction: 'SECONDARY INSPECTION',
-      actionGuidance: 'Refer traveler to secondary desk for corroborating credential verification and database cross-reference.',
-      badgeBg: 'bg-amber-50',
-      badgeBorder: 'border-amber-200',
-      badgeText: 'text-amber-800',
-      accentColor: '#f59e0b',
-    };
-  }
-
-  if (clampedScore <= 80) {
-    return {
-      band: 'HIGH RISK',
-      level: 'high',
-      recommendedAction: 'MANUAL REVIEW REQUIRED',
-      actionGuidance: 'Mandatory physical document examination by senior forensic officer. Compounding risk indicators present.',
-      badgeBg: 'bg-orange-50',
-      badgeBorder: 'border-orange-300',
-      badgeText: 'text-orange-900',
-      accentColor: '#f97316',
-    };
-  }
-
   return {
-    band: 'CRITICAL RISK',
+    band: 'MISMATCH (REJECTED)',
     level: 'critical',
-    recommendedAction: 'CRITICAL ESCALATION / REJECT ADMISSION',
-    actionGuidance: 'Immediate alert to Joint Border Intelligence. Retain credential for forensic analysis; flag for refusal of entry.',
+    recommendedAction: 'REJECT ADMISSION (MISMATCH)',
+    actionGuidance: 'Strict binary policy mandate: Only perfect matches with authorized database records are permitted to pass. Documents with mismatches, anomalies, or missing records are rejected.',
     badgeBg: 'bg-red-50',
     badgeBorder: 'border-red-300',
     badgeText: 'text-red-900',

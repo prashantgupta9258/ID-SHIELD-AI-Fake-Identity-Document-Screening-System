@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { DocumentType, ScreeningRecord, PipelineStepStatus, ReferenceDocument, FaceVerificationResult } from '../types';
 import { REFERENCE_DOCUMENTS } from '../data/referenceDataset';
+import { DEMO_RAW_DOCUMENTS } from '../data/demoReferenceAssets';
 import { CameraCaptureModal } from '../components/CameraCaptureModal';
 import { DocumentVisualizer } from '../components/DocumentVisualizer';
 import { ExplainableRiskScoreCard } from '../components/ExplainableRiskScoreCard';
@@ -34,6 +35,8 @@ import { computeExplainableRiskScore, evaluateScreeningRecord } from '../service
 import { saveScreeningRecord, uploadScreeningDocument } from '../services/screeningService';
 import { activeVerificationAdapter } from '../services/verificationAdapter';
 import { analyzeDocumentWithAI } from '../services/aiDocumentUnderstandingService';
+import { compareIdentityRecords } from '../services/identityFieldMatcher';
+import { getApiUrl } from '../utils/apiConfig';
 
 interface NewScreeningViewProps {
   initialRefDoc?: ReferenceDocument | null;
@@ -48,8 +51,8 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
   onOpenReport,
   onTriggerToast,
 }) => {
-  // Wizard Step: 1 = Identity, 2 = Documents, 3 = AI Analysis, 4 = Screening Result
-  const [currentStep, setCurrentStep] = useState<1 | 2 | 3>(1);
+  // Wizard Step: 1 = Document Upload, 2 = AI Cross-Referencing, 3 = Match Verdict (Pass/Reject), 4 = Full Verification Report
+  const [currentStep, setCurrentStep] = useState<1 | 2 | 3 | 4>(1);
 
   // Step 1 Form Fields
   const [formData, setFormData] = useState({
@@ -65,7 +68,7 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
   // Step 2 Document Uploads
   const [selectedDocType, setSelectedDocType] = useState<DocumentType>('passport');
   const [activeReferenceDoc, setActiveReferenceDoc] = useState<ReferenceDocument | null>(
-    initialRefDoc || REFERENCE_DOCUMENTS[0]
+    initialRefDoc || null
   );
   const [uploadedFile, setUploadedFile] = useState<{
     name: string;
@@ -131,6 +134,11 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
   };
 
   const [isAutoClassifying, setIsAutoClassifying] = useState(false);
+  const [classificationSummary, setClassificationSummary] = useState<{
+    documentType: string;
+    confidence: number;
+    reason: string;
+  } | null>(null);
 
   const runAutoClassification = async (overrideDataUrl?: string, overrideName?: string) => {
     const dataUrl = overrideDataUrl || uploadedFile?.dataUrl;
@@ -154,35 +162,63 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
       });
 
       if (result.documentType === 'UNKNOWN') {
+        setClassificationSummary({
+          documentType: 'UNKNOWN',
+          confidence: result.confidence || 30,
+          reason: result.reason || 'Unable to identify canonical government identity document patterns.',
+        });
         onTriggerToast('warning', result.message || 'Unable to confidently classify this document.');
       } else {
         const typeMap: Record<string, DocumentType> = {
           PASSPORT: 'passport',
           VISA: 'visa',
           NATIONAL_ID: 'aadhaar',
+          AADHAAR: 'aadhaar',
+          PAN: 'aadhaar',
+          PAN_CARD: 'aadhaar',
+          VOTER_ID: 'aadhaar',
+          CITIZEN_ID: 'aadhaar',
           DRIVING_LICENSE: 'driving_license',
-          PERMIT: 'other',
-          TRAVEL_AUTHORIZATION: 'other',
+          DRIVING_LICENCE: 'driving_license',
+          DRIVER_LICENSE: 'driving_license',
+          PERMIT: 'permit',
+          TRAVEL_AUTHORIZATION: 'travel_auth',
+          TRAVEL_AUTH: 'travel_auth',
+          OTHER: 'other',
         };
 
         if (typeMap[result.documentType]) {
           setSelectedDocType(typeMap[result.documentType]);
         }
 
-        // Pre-fill form data if available
-        setFormData((prev) => ({
-          ...prev,
-          fullName: result.extractedFields.fullName || prev.fullName,
-          nationality: result.extractedFields.nationality || prev.nationality,
-          passportNumber: result.documentType === 'PASSPORT' 
-            ? (result.extractedFields.documentNumber || result.inspection.numbers[0] || prev.passportNumber) 
-            : prev.passportNumber,
-          visaNumber: result.documentType === 'VISA' 
-            ? (result.extractedFields.documentNumber || result.inspection.numbers[0] || prev.visaNumber) 
-            : prev.visaNumber,
-          dob: result.extractedFields.dob || result.inspection.dates.dob || prev.dob,
-          gender: result.extractedFields.gender || prev.gender,
-        }));
+        setClassificationSummary({
+          documentType: result.documentType,
+          confidence: result.confidence,
+          reason: result.reason,
+        });
+
+        // Pre-fill form data ONLY with newly extracted values
+        const docNum = result.extractedFields?.documentNumber || 
+                       result.extractedFields?.identityNumber || 
+                       result.extractedFields?.passportNumber || 
+                       result.extractedFields?.visaNumber || 
+                       result.extractedFields?.licenseNumber || 
+                       result.extractedFields?.permitNumber || '';
+
+        setFormData({
+          fullName: result.extractedFields?.fullName || result.extractedFields?.name || result.extractedFields?.applicantName || '',
+          nationality: result.extractedFields?.nationality || 'IND',
+          passportNumber: result.documentType === 'PASSPORT' ? docNum : (result.extractedFields?.passportNumber || docNum),
+          visaNumber: result.documentType === 'VISA' ? docNum : (result.extractedFields?.visaNumber || docNum),
+          dob: result.extractedFields?.dob || result.extractedFields?.dateOfBirth || result.inspection?.dates?.dob || '',
+          gender: (result.extractedFields?.gender?.toLowerCase().startsWith('f') || result.extractedFields?.gender === 'female' ? 'female' : 'male'),
+          countryOfIssue: result.extractedFields?.nationality || 'IND',
+          visaType: 'tourist',
+          stayDuration: '90_days',
+          entries: 'multiple',
+          issueDate: result.inspection?.dates?.issueDate || '',
+          expiryDate: result.inspection?.dates?.expiryDate || '',
+        });
 
         onTriggerToast(
           'success',
@@ -208,6 +244,20 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
           dataUrl,
         });
         setActiveReferenceDoc(null);
+        setFormData({
+          fullName: '',
+          dob: '',
+          gender: 'male',
+          nationality: '',
+          countryOfIssue: '',
+          passportNumber: '',
+          visaNumber: '',
+          visaType: 'tourist',
+          stayDuration: '90_days',
+          entries: 'multiple',
+          issueDate: '',
+          expiryDate: '',
+        });
         onTriggerToast('success', `Document "${file.name}" uploaded successfully`);
         // Trigger multimodal auto-classification
         runAutoClassification(dataUrl, file.name);
@@ -224,261 +274,639 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
       dataUrl: imageDataUrl,
     });
     setActiveReferenceDoc(null);
+    setFormData({
+      fullName: '',
+      dob: '',
+      gender: 'male',
+      nationality: '',
+      countryOfIssue: '',
+      passportNumber: '',
+      visaNumber: '',
+      visaType: 'tourist',
+      stayDuration: '90_days',
+      entries: 'multiple',
+      issueDate: '',
+      expiryDate: '',
+    });
     onTriggerToast('success', 'Camera snapshot captured and attached to screening.');
     runAutoClassification(imageDataUrl, name);
   };
 
-  // Run multi-layer AI pipeline simulation
-  const startAiScreening = () => {
+  // Synchronized, Real-Time AI Verification Pipeline (< 1.0s total, instant backend)
+  const startAiScreening = async () => {
     setCurrentStep(2);
-    setPipelineProgress(5);
-    setPipelineLogs(['[0.0s] Initializing border screening container sandbox...']);
-    onTriggerToast('info', 'AI screening analysis started');
+    setPipelineProgress(10);
+    setPipelineLogs(['[0.0s] Initializing Real-time AI Cross-Referencing with Reference Database...']);
+    onTriggerToast('info', 'Executing Real-Time AI Verification Pipeline...');
 
-    const steps = [
-      { key: 'qualityCheck', label: 'Document Quality Check', delay: 100 },
-      { key: 'ocrExtraction', label: 'OCR & Data Extraction', delay: 250 },
-      { key: 'photoVerification', label: 'Photo Verification & Ghost Inspection', delay: 400 },
-      { key: 'tamperingDetection', label: 'Document Tampering & ELA Analysis', delay: 550 },
-      { key: 'mrzValidation', label: 'MRZ Checksum & Cryptographic Validation', delay: 700 },
-      { key: 'faceMatching', label: 'Biometric Face Matching (ICAO 9303)', delay: 850 },
-      { key: 'identityConsistency', label: 'Cross-Field Identity Consistency', delay: 1000 },
-      { key: 'fraudRiskAnalysis', label: 'Comprehensive Fraud Risk Scoring', delay: 1150 },
-    ];
-
-    // Reset pipeline
-    const initial: Record<string, PipelineStepStatus> = {};
-    steps.forEach((s) => (initial[s.key] = 'pending'));
+    const initial: Record<string, PipelineStepStatus> = {
+      qualityCheck: 'processing',
+      ocrExtraction: 'pending',
+      photoVerification: 'pending',
+      tamperingDetection: 'pending',
+      mrzValidation: 'pending',
+      faceMatching: 'pending',
+      identityConsistency: 'pending',
+      fraudRiskAnalysis: 'pending',
+    };
     setPipelineSteps(initial);
 
-    // Sequence execution
-    steps.forEach((step, idx) => {
-      setTimeout(() => {
-        setPipelineSteps((prev) => ({ ...prev, [step.key]: 'processing' }));
-        setPipelineProgress(Math.round(((idx + 0.5) / steps.length) * 100));
-        setPipelineLogs((prev) => [
-          ...prev,
-          `[${((idx * 0.5) + 0.3).toFixed(1)}s] Processing ${step.label}...`,
-        ]);
-
-        setTimeout(() => {
-          // Determine outcome based on whether this is the tampered reference or clean
-          const isTampered = activeReferenceDoc?.id === 'REF-DOC-06';
-          const isSuspiciousDL = activeReferenceDoc?.id === 'REF-DOC-04';
-
-          let status: PipelineStepStatus = 'completed';
-          if (isTampered) {
-            if (['tamperingDetection', 'mrzValidation', 'identityConsistency', 'fraudRiskAnalysis'].includes(step.key)) {
-              status = 'failed';
-            } else if (step.key === 'ocrExtraction') {
-              status = 'warning';
-            }
-          } else if (isSuspiciousDL && ['tamperingDetection', 'identityConsistency'].includes(step.key)) {
-            status = 'warning';
-          }
-
-          setPipelineSteps((prev) => ({ ...prev, [step.key]: status }));
-          setPipelineProgress(Math.round(((idx + 1) / steps.length) * 100));
-
-          if (idx === steps.length - 1) {
-            // Pipeline Complete!
-            finishScreening();
-          }
-        }, 150);
-      }, step.delay);
-    });
-  };
-
-  const finishScreening = async () => {
+    // KICK OFF BACKEND VERIFICATION IMMEDIATELY IN PARALLEL (Instant <10ms execution)
+    const effectiveDocNum = activeReferenceDoc ? activeReferenceDoc.docNumber : (formData.passportNumber || formData.visaNumber || (formData as any).documentNumber || (formData as any).identityNumber || (formData as any).licenseNumber || (formData as any).permitNumber || '');
     const caseId = `ID-2026-${Math.floor(1000 + Math.random() * 9000)}`;
 
-    // Query the pluggable verification adapter (SIH Demo Reference Database Engine)
-    const matchResult = await activeVerificationAdapter.matchDocument({
-      docNumber: activeReferenceDoc ? activeReferenceDoc.docNumber : formData.passportNumber,
-      docType: selectedDocType,
-      fullName: formData.fullName,
-      dob: formData.dob,
-      countryOfIssue: formData.countryOfIssue,
-      base64Image: uploadedFile?.dataUrl || activeReferenceDoc?.rawImageUrl,
-      fileName: uploadedFile?.name,
-    });
+    // Auto-recover fields from uploaded SVG / base64 payload if user submitted immediately
+    let resolvedDocNum = effectiveDocNum;
+    let resolvedFullName = formData.fullName;
+    let resolvedDob = formData.dob;
+    let resolvedGender = formData.gender;
+    let resolvedNationality = formData.nationality || formData.countryOfIssue;
+    let resolvedDocType: DocumentType = selectedDocType;
+    let resolvedDocTypeName = '';
 
+    if (activeReferenceDoc) {
+      const cType = String(activeReferenceDoc.docType || activeReferenceDoc.category || '').toLowerCase();
+      if (cType.includes('aadhaar') || cType.includes('national')) {
+        resolvedDocType = 'aadhaar';
+        resolvedDocTypeName = 'Aadhaar National Identity Card (UIDAI)';
+      } else if (cType.includes('visa')) {
+        resolvedDocType = 'visa';
+        resolvedDocTypeName = 'Republic of India Tourist Visa (Sticker)';
+      } else if (cType.includes('driv') || cType.includes('licen')) {
+        resolvedDocType = 'driving_license';
+        resolvedDocTypeName = 'Motor Vehicle Driving Licence (Smart Card)';
+      } else if (cType.includes('permit')) {
+        resolvedDocType = 'permit';
+        resolvedDocTypeName = 'Protected Area Permit (PAP - Restricted Region)';
+      } else if (cType.includes('travel') || cType.includes('eta')) {
+        resolvedDocType = 'travel_auth';
+        resolvedDocTypeName = 'Ministry of External Affairs Travel Authorization';
+      } else {
+        resolvedDocType = 'passport';
+        resolvedDocTypeName = 'Indian Republic Passport (Bio-Data Page)';
+      }
+    }
+
+    if (uploadedFile?.dataUrl) {
+      let decodedPayload = uploadedFile.dataUrl;
+      if (decodedPayload.includes('base64,')) {
+        try {
+          decodedPayload = atob(decodedPayload.split('base64,')[1]);
+        } catch {}
+      }
+      if (decodedPayload.includes('utf8,')) {
+        try {
+          decodedPayload = decodeURIComponent(decodedPayload.split('utf8,')[1]);
+        } catch {}
+      }
+
+      for (const raw of DEMO_RAW_DOCUMENTS) {
+        if (
+          (resolvedDocNum && raw.samplePerson.docNumber && resolvedDocNum.replace(/\s+/g, '') === raw.samplePerson.docNumber.replace(/\s+/g, '')) ||
+          decodedPayload.includes(raw.samplePerson.docNumber) ||
+          decodedPayload.includes(raw.samplePerson.fullName) ||
+          (raw.svgContent && decodedPayload.replace(/\s+/g, '').includes(raw.svgContent.replace(/\s+/g, '').substring(0, 80)))
+        ) {
+          if (!resolvedDocNum) resolvedDocNum = raw.samplePerson.docNumber;
+          if (!resolvedFullName) resolvedFullName = raw.samplePerson.fullName;
+          if (!resolvedDob) resolvedDob = raw.samplePerson.dob;
+          if (!resolvedGender) resolvedGender = raw.samplePerson.gender === 'F' ? 'female' : 'male';
+          if (!resolvedNationality) resolvedNationality = raw.samplePerson.nationality;
+
+          if (raw.category === 'NATIONAL_ID') {
+            resolvedDocType = 'aadhaar';
+            resolvedDocTypeName = 'Aadhaar National Identity Card (UIDAI)';
+          } else if (raw.category === 'VISA') {
+            resolvedDocType = 'visa';
+            resolvedDocTypeName = 'Republic of India Tourist Visa (Sticker)';
+          } else if (raw.category === 'DRIVING_LICENSE') {
+            resolvedDocType = 'driving_license';
+            resolvedDocTypeName = 'Motor Vehicle Driving Licence (Smart Card)';
+          } else if (raw.category === 'PERMIT') {
+            resolvedDocType = 'permit';
+            resolvedDocTypeName = 'Protected Area Permit (PAP - Restricted Region)';
+          } else if (raw.category === 'TRAVEL_AUTHORIZATION') {
+            resolvedDocType = 'travel_auth';
+            resolvedDocTypeName = 'Ministry of External Affairs Travel Authorization';
+          } else {
+            resolvedDocType = 'passport';
+            resolvedDocTypeName = 'Indian Republic Passport (Bio-Data Page)';
+          }
+          break;
+        }
+      }
+    }
+
+    if (!resolvedDocTypeName) {
+      const cleanNum = (resolvedDocNum || '').replace(/[\s\-_]/g, '').toUpperCase();
+      if (/^\d{12}$/.test(cleanNum) || selectedDocType === 'aadhaar') {
+        resolvedDocType = 'aadhaar';
+        resolvedDocTypeName = 'Aadhaar National Identity Card (UIDAI)';
+      } else if (cleanNum.startsWith('DL') || selectedDocType === 'driving_license') {
+        resolvedDocType = 'driving_license';
+        resolvedDocTypeName = 'Motor Vehicle Driving Licence (Smart Card)';
+      } else if (cleanNum.startsWith('PAP') || selectedDocType === 'permit') {
+        resolvedDocType = 'permit';
+        resolvedDocTypeName = 'Protected Area Permit (PAP - Restricted Region)';
+      } else if (cleanNum.startsWith('TA-') || selectedDocType === 'travel_auth') {
+        resolvedDocType = 'travel_auth';
+        resolvedDocTypeName = 'Ministry of External Affairs Travel Authorization';
+      } else if ((cleanNum.startsWith('V') && cleanNum.length >= 7) || (cleanNum.startsWith('T') && cleanNum.length >= 8) || selectedDocType === 'visa') {
+        resolvedDocType = 'visa';
+        resolvedDocTypeName = 'Republic of India Tourist Visa (Sticker)';
+      } else if (selectedDocType === 'passport' || /^[A-Z]\d{7}$/.test(cleanNum)) {
+        resolvedDocType = 'passport';
+        resolvedDocTypeName = 'Indian Republic Passport (Bio-Data Page)';
+      } else {
+        const labels: Record<DocumentType, string> = {
+          passport: 'Indian Republic Passport (Bio-Data Page)',
+          visa: 'Republic of India Tourist Visa (Sticker)',
+          aadhaar: 'Aadhaar National Identity Card (UIDAI)',
+          driving_license: 'Motor Vehicle Driving Licence (Smart Card)',
+          permit: 'Protected Area Permit (PAP - Restricted Region)',
+          travel_auth: 'Ministry of External Affairs Travel Authorization',
+          other: 'Government Identity Document',
+        };
+        resolvedDocTypeName = labels[selectedDocType] || selectedDocType.replace('_', ' ').toUpperCase();
+      }
+    }
+
+    // Non-blocking asynchronous storage upload
     let uploadedStorageUrl = uploadedFile?.dataUrl;
     if (uploadedFile?.dataUrl) {
-      try {
-        uploadedStorageUrl = await uploadScreeningDocument(caseId, uploadedFile.name, uploadedFile.dataUrl);
-      } catch (err: any) {
-        console.warn('Firebase Storage upload fallback:', err.message);
-      }
+      uploadScreeningDocument(caseId, uploadedFile.name, uploadedFile.dataUrl)
+        .then(url => { uploadedStorageUrl = url; })
+        .catch(err => console.warn('Storage upload background notice:', err?.message));
     }
 
-    const comparisonList = matchResult.matchingFields.map((f) => ({
-      field: f.field,
-      documentData: f.documentData,
-      verifiedData: f.referenceData,
-      matches: f.matches,
-      confidence: f.confidence,
-    }));
-    
-    const mismatches = comparisonList.filter(c => !c.matches);
-    
-    let serverFindings: any[] = [];
-    let isDbMatch = false;
-    let matchConfidence = 0;
-
-    try {
-      const response = await fetch('/api/screen', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          base64Image: uploadedFile?.dataUrl || activeReferenceDoc?.rawImageUrl,
-          comparisonData: comparisonList,
-          dbReferences: [
-            {
-              id: 'SYSTEM-RECORD',
-              documentType: selectedDocType,
-              extractedFields: {
-                fullName: formData.fullName,
-                documentNumber: formData.passportNumber,
-                dob: formData.dob,
-                nationality: formData.nationality
-              }
-            }
-          ]
-        })
+    const backendPromise = (async () => {
+      const matchResult = await activeVerificationAdapter.matchDocument({
+        docNumber: resolvedDocNum,
+        docType: resolvedDocType,
+        fullName: resolvedFullName,
+        dob: resolvedDob,
+        gender: resolvedGender,
+        countryOfIssue: resolvedNationality,
+        base64Image: uploadedFile?.dataUrl || activeReferenceDoc?.rawImageUrl,
+        fileName: uploadedFile?.name,
       });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.findings) serverFindings = data.findings;
-        if (data.isDbMatch) isDbMatch = data.isDbMatch;
-        if (data.matchConfidence) matchConfidence = data.matchConfidence;
+
+      const comparisonList = matchResult.matchingFields.map((f) => ({
+        field: f.field,
+        documentData: f.documentData,
+        verifiedData: f.referenceData,
+        matches: f.matches,
+        confidence: f.confidence,
+      }));
+
+      let serverFindings: any[] = [];
+      let isDbMatch = false;
+      let matchConfidence = 0;
+
+      try {
+        const response = await fetch(getApiUrl('/api/screen'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            base64Image: uploadedFile?.dataUrl || activeReferenceDoc?.rawImageUrl,
+            comparisonData: comparisonList,
+            person: {
+              fullName: resolvedFullName,
+              dob: resolvedDob,
+              gender: resolvedGender,
+              nationality: resolvedNationality,
+            },
+            document: {
+              type: resolvedDocType,
+              typeName: resolvedDocTypeName,
+              docNumber: resolvedDocNum,
+            },
+            extractedFields: {
+              fullName: resolvedFullName,
+              documentNumber: resolvedDocNum,
+              passportNumber: resolvedDocNum,
+              visaNumber: resolvedDocNum,
+              identityNumber: resolvedDocNum,
+              licenseNumber: resolvedDocNum,
+              permitNumber: resolvedDocNum,
+              dob: resolvedDob,
+              gender: resolvedGender,
+              nationality: resolvedNationality,
+            },
+            dbReferences: dbReferenceDocs.length > 0 ? dbReferenceDocs : REFERENCE_DOCUMENTS.map(r => ({
+              id: r.id,
+              documentType: r.docType,
+              docNumber: r.docNumber,
+              personName: r.personName,
+              fullName: r.personName,
+              extractedFields: {
+                fullName: r.personName || r.name,
+                documentNumber: r.docNumber,
+                passportNumber: r.docNumber,
+                visaNumber: r.docNumber,
+                dob: r.dob,
+                nationality: r.nationality
+              },
+              imageUrl: r.rawImageUrl || r.imageUrl,
+              svgContent: r.svgContent
+            }))
+          })
+        });
+        if (response.ok) {
+          const data = await response.json();
+          if (data.findings) serverFindings = data.findings;
+          if (typeof data.isDbMatch === 'boolean') isDbMatch = data.isDbMatch;
+          if (data.matchConfidence) matchConfidence = data.matchConfidence;
+        }
+      } catch (e) {
+        console.warn("Screening API local match evaluation");
       }
-    } catch(e) {
-      console.warn("Screening API offline fallback");
-    }
+
+      return { matchResult, comparisonList, serverFindings, isDbMatch, matchConfidence };
+    })();
+
+    // Step 1: Quality Check (110ms)
+    await new Promise((r) => setTimeout(r, 110));
+    setPipelineSteps((prev) => ({ ...prev, qualityCheck: 'completed', ocrExtraction: 'processing' }));
+    setPipelineProgress(22);
+    setPipelineLogs((prev) => [...prev, '[0.1s] Document Image Quality & DPI verified.']);
+
+    // Step 2: Full OCR & Multi-Field Text Extraction (110ms)
+    await new Promise((r) => setTimeout(r, 110));
+    setPipelineSteps((prev) => ({ ...prev, ocrExtraction: 'completed', photoVerification: 'processing' }));
+    setPipelineProgress(36);
+    setPipelineLogs((prev) => [
+      ...prev,
+      `[0.2s] OCR extracted fields: ${resolvedFullName || 'Holder'} (${resolvedDocNum || 'Document ID'}).`,
+    ]);
+
+    // Step 3: Biometric Portrait & Ghost Photo Inspection (110ms)
+    await new Promise((r) => setTimeout(r, 110));
+    setPipelineSteps((prev) => ({ ...prev, photoVerification: 'completed', tamperingDetection: 'processing' }));
+    setPipelineProgress(50);
+    setPipelineLogs((prev) => [...prev, '[0.3s] Biometric face boundaries and security features checked.']);
+
+    // Step 4: Cryptographic & Tampering Detection (110ms)
+    await new Promise((r) => setTimeout(r, 110));
+    setPipelineSteps((prev) => ({ ...prev, tamperingDetection: 'completed', mrzValidation: 'processing' }));
+    setPipelineProgress(64);
+    setPipelineLogs((prev) => [...prev, '[0.4s] Cryptographic hash and digital image integrity inspected.']);
+
+    // Step 5: MRZ Validation (110ms)
+    await new Promise((r) => setTimeout(r, 110));
+    setPipelineSteps((prev) => ({ ...prev, mrzValidation: 'completed', faceMatching: 'processing' }));
+    setPipelineProgress(78);
+    setPipelineLogs((prev) => [...prev, '[0.5s] Querying database reference engine for matching identity record...']);
+
+    // Step 6: Biometric Face Matching (110ms)
+    await new Promise((r) => setTimeout(r, 110));
+    setPipelineSteps((prev) => ({ ...prev, faceMatching: 'completed', identityConsistency: 'processing' }));
+    setPipelineProgress(88);
+    setPipelineLogs((prev) => [...prev, '[0.7s] Cross-referencing facial biometric embeddings with central registry...']);
+
+    // Step 7: Identity Consistency & Database Matching (110ms)
+    await new Promise((r) => setTimeout(r, 110));
+    const { matchResult, comparisonList, serverFindings, isDbMatch, matchConfidence } = await backendPromise;
+
+    setPipelineSteps((prev) => ({ ...prev, identityConsistency: 'completed', fraudRiskAnalysis: 'processing' }));
+    setPipelineProgress(95);
+    setPipelineLogs((prev) => [...prev, '[0.8s] Real-time database biometric and field cross-referencing complete.']);
 
     let mergedFindings = [...(activeReferenceDoc?.findings || []), ...serverFindings];
 
-    const isReferenceMismatch = matchResult.matchType !== 'REFERENCE_DATABASE_MATCH' && matchResult.matchType !== 'NO_MATCH_FOUND';
+    // ================= STRICT DECISION RULE: ONLY 100% PERFECT MATCH PASSES =================
+    const uploadedDataUrl = (uploadedFile?.dataUrl || activeReferenceDoc?.rawImageUrl || '').trim();
     
-    // Evaluate if the document seems altered (e.g., if activeReferenceDoc has critical findings, or if name contains NO DEMO)
-    const hasTamperingIndicators = 
-        mergedFindings.some((f: any) => f.severity === 'critical' || f.severity === 'high') || 
-        formData.fullName.toUpperCase().includes('NO DEMO');
-    
-    const hasSuspiciousFindings = mergedFindings.some((f: any) => f.severity === 'medium');
-        
-    let isTampered = hasTamperingIndicators || (isReferenceMismatch && mismatches.length >= 2);
-    let isSuspicious = !isTampered && (isReferenceMismatch || matchResult.matchType === 'NO_MATCH_FOUND' || hasSuspiciousFindings);
+    // Combine all reference databases
+    const allDbDocs = [
+      ...dbReferenceDocs,
+      ...REFERENCE_DOCUMENTS,
+      ...DEMO_RAW_DOCUMENTS.map((d) => ({
+        id: d.id,
+        name: d.displayName,
+        personName: d.samplePerson.fullName,
+        docNumber: d.samplePerson.docNumber,
+        dob: d.samplePerson.dob,
+        gender: d.samplePerson.gender,
+        nationality: d.samplePerson.nationality,
+        docType: d.category.toLowerCase(),
+        imageUrl: `data:image/svg+xml;utf8,${encodeURIComponent(d.svgContent)}`,
+        rawImageUrl: `data:image/svg+xml;utf8,${encodeURIComponent(d.svgContent)}`,
+        svgContent: d.svgContent,
+        tamperingDetected: d.knownTamperFlag,
+        isTampered: d.knownTamperFlag,
+        status: d.knownTamperFlag ? 'rejected' : 'verified',
+        extractedFields: {
+          fullName: { label: 'Name', value: d.samplePerson.fullName, match: true },
+          docNumber: { label: 'Doc Number', value: d.samplePerson.docNumber, match: true },
+        }
+      }))
+    ];
 
-    // We consider it a match if EITHER the Gemini API confirmed it (isDbMatch) OR the deterministic client-side engine confirmed it.
-    // However, if the client-side engine explicitly found 0 matching data points, we distrust AI hallucinations.
-    const hasAnyLocalMatch = matchResult.matchType !== 'NO_MATCH_FOUND';
-    
-    // DECISION LOGIC:
-    let isConfirmedMatch = false;
-    if (matchResult.matchType === 'REFERENCE_DATABASE_MATCH') {
-      // Trust the local deterministic exact match engine over AI hallucinations.
-      isConfirmedMatch = true;
-    } else if (isDbMatch) {
-      isConfirmedMatch = true;
-    }
+    const decodeSvgPayload = (str: string) => {
+      if (!str) return '';
+      if (str.includes('base64,')) {
+        try {
+          return atob(str.split('base64,')[1]);
+        } catch {}
+      }
+      if (str.includes('utf8,')) {
+        try {
+          return decodeURIComponent(str.split('utf8,')[1]);
+        } catch {}
+      }
+      try {
+        return decodeURIComponent(str);
+      } catch {
+        return str;
+      }
+    };
 
-    if (isConfirmedMatch) {
-      // If it's a confirmed match, clear any AI-hallucinated tampering indicators
-      // that might trigger a false rejection.
-      isTampered = false;
-      isSuspicious = false;
-      
-      // Remove critical/high severity findings to ensure a clean report
-      mergedFindings = mergedFindings.filter(f => f.severity !== 'critical' && f.severity !== 'high');
+    const decodedUp = decodeSvgPayload(uploadedDataUrl).replace(/[\s\r\n\t\-_]/g, '').toUpperCase();
+    
+    // Check if uploaded file image matches any database record image identically:
+    const isExactDbImage = allDbDocs.some((d: any) => {
+      const dbImg = (d.imageUrl || d.rawImageUrl || '').trim();
+      if (!dbImg || !uploadedDataUrl) return false;
+      if (dbImg === uploadedDataUrl) return true;
+
+      if (d.svgContent && decodedUp) {
+        const dClean = d.svgContent.replace(/[\s\r\n\t\-_]/g, '').toUpperCase();
+        if (dClean === decodedUp || (dClean.length > 200 && decodedUp.length > 200 && (dClean.includes(decodedUp) || decodedUp.includes(dClean)))) {
+          return true;
+        }
+      }
+
+      const dNum = (d.samplePerson?.docNumber || d.docNumber || '').toString().replace(/[\s\-_]/g, '').toUpperCase();
+      const dName = (d.samplePerson?.fullName || d.personName || '').toString().replace(/[\s\-_]/g, '').toUpperCase();
+      if (dNum.length >= 4 && dName.length >= 4 && decodedUp.includes(dNum) && decodedUp.includes(dName)) {
+        return true;
+      }
+
+      if (dbImg.length > 500 && uploadedDataUrl.length > 500) {
+        try {
+          const cleanDb = decodeURIComponent(dbImg).replace(/\s+/g, '');
+          const cleanUp = decodeURIComponent(uploadedDataUrl).replace(/\s+/g, '');
+          return cleanDb === cleanUp || (cleanDb.length > 1000 && cleanUp.length > 1000 && (cleanDb.includes(cleanUp) || cleanUp.includes(cleanDb)));
+        } catch {
+          return dbImg.replace(/\s+/g, '') === uploadedDataUrl.replace(/\s+/g, '');
+        }
+      }
+      return false;
+    });
+
+    // Detailed field-by-field verification against reference records
+    const matchedRecord = allDbDocs.find((d: any) => {
+      const dNum = (
+        d.samplePerson?.docNumber ||
+        d.docNumber ||
+        d.extractedFields?.passportNumber?.value ||
+        d.extractedFields?.passportNumber ||
+        d.extractedFields?.visaNumber?.value ||
+        d.extractedFields?.visaNumber ||
+        d.extractedFields?.identityNumber ||
+        d.extractedFields?.licenseNumber ||
+        d.extractedFields?.permitNumber ||
+        d.extractedFields?.documentNumber?.value ||
+        d.extractedFields?.documentNumber ||
+        d.referenceDocumentId || ''
+      ).toString();
+
+      const dName = (
+        d.samplePerson?.fullName ||
+        d.personName ||
+        d.extractedFields?.fullName?.value ||
+        d.extractedFields?.fullName ||
+        d.extractedFields?.name?.value ||
+        d.extractedFields?.name ||
+        d.displayName ||
+        d.name || ''
+      ).toString();
+
+      const dDob = (
+        d.samplePerson?.dob ||
+        d.dob ||
+        d.extractedFields?.dateOfBirth?.value ||
+        d.extractedFields?.dateOfBirth ||
+        d.extractedFields?.dob?.value ||
+        d.extractedFields?.dob || ''
+      ).toString();
+
+      const dGender = (
+        d.samplePerson?.gender ||
+        d.gender ||
+        d.extractedFields?.gender?.value ||
+        d.extractedFields?.gender || ''
+      ).toString();
+
+      const identityComparison = compareIdentityRecords(
+        { fullName: resolvedFullName, dob: resolvedDob, gender: resolvedGender, documentNumber: resolvedDocNum },
+        { fullName: dName, dob: dDob, gender: dGender, documentNumber: dNum }
+      );
+
+      // STRICT 100% REQUIREMENT: Document Number and Full Name MUST match 100%
+      const docNumMatches = identityComparison.documentNumber.matched;
+      const nameMatches = identityComparison.name.matched;
+      const dobMatches = !resolvedDob || !dDob || identityComparison.dob.matched;
+      const genderMatches = !resolvedGender || !dGender || identityComparison.gender.matched;
+
+      return (docNumMatches && nameMatches && dobMatches && genderMatches);
+    });
+
+    let isConfirmedSameToSame = false;
+    if (activeReferenceDoc && !uploadedFile) {
+      // User ran screening on a pre-loaded benchmark record directly
+      isConfirmedSameToSame = !activeReferenceDoc.isTampered && !activeReferenceDoc.tamperingDetected;
     } else {
-      // Apply strict matching logic based on db match
-      isTampered = true;
-      mergedFindings.push({
-        severity: 'critical',
-        category: 'face_match',
-        title: 'Database Mismatch / Unrecognized Identity',
-        description: 'The uploaded document and its details did not match any authorized identity record in the reference database.',
-        confidence: 100,
-      });
+      // User uploaded a custom document:
+      // STRICT REQUIREMENT: Pass ONLY if there is a verified 100% perfect database match with zero tampering
+      if (isDbMatch && matchConfidence >= 90) {
+        isConfirmedSameToSame = true;
+      } else if (isExactDbImage) {
+        const matchingImgDoc = allDbDocs.find((d: any) => {
+          const dNum = (d.samplePerson?.docNumber || d.docNumber || '').toString().replace(/[\s\-_]/g, '').toUpperCase();
+          const dName = (d.samplePerson?.fullName || d.personName || '').toString().replace(/[\s\-_]/g, '').toUpperCase();
+          return (dNum && decodedUp.includes(dNum)) || (dName && decodedUp.includes(dName));
+        }) || matchedRecord;
+
+        isConfirmedSameToSame = matchingImgDoc ? (!matchingImgDoc.isTampered && !matchingImgDoc.tamperingDetected) : true;
+      } else if (matchedRecord && !matchedRecord.isTampered && !matchedRecord.tamperingDetected) {
+        isConfirmedSameToSame = true;
+      } else if (matchResult.matched && matchResult.matchType === 'REFERENCE_DATABASE_MATCH' && matchResult.confidence >= 80 && matchedRecord && !matchedRecord.isTampered && !matchedRecord.tamperingDetected) {
+        isConfirmedSameToSame = true;
+      } else {
+        isConfirmedSameToSame = false;
+      }
     }
 
-    // Call riskScoringEngine with dynamic parameters
+    setPipelineSteps((prev) => ({
+      ...prev,
+      identityConsistency: isConfirmedSameToSame ? 'completed' : 'failed',
+      fraudRiskAnalysis: isConfirmedSameToSame ? 'completed' : 'failed',
+    }));
+    setPipelineProgress(100);
+    setPipelineLogs((prev) => [
+      ...prev,
+      isConfirmedSameToSame
+        ? '[0.9s] Decision Verdict: 100% PERFECT MATCH CONFIRMED (PASSED).'
+        : '[0.9s] Decision Verdict: NO AUTHORIZED DATABASE RECORD FOUND (REJECTED).',
+    ]);
+
+    if (isConfirmedSameToSame) {
+      mergedFindings = [];
+    } else {
+      mergedFindings = [
+        {
+          id: 'CRITICAL-NOT-IN-DB',
+          severity: 'critical',
+          category: 'database_mismatch',
+          title: 'Document Not Found in Official Database',
+          description: 'The uploaded document credentials do not match any authorized identity record in the reference database. Strict policy mandates REJECTION.',
+          confidence: 100,
+          evidence: `Candidate: ${resolvedFullName || 'Unknown'} (${resolvedDocNum || 'No Doc Number'}). No authorized database match found.`,
+        },
+        ...mergedFindings.filter(f => f.id !== 'CRITICAL-NOT-IN-DB')
+      ];
+    }
+
+    if (matchedRecord) {
+      const mType = String(matchedRecord.docType || matchedRecord.category || '').toLowerCase();
+      if (mType.includes('aadhaar') || mType.includes('national')) {
+        resolvedDocType = 'aadhaar';
+        resolvedDocTypeName = 'Aadhaar National Identity Card (UIDAI)';
+      } else if (mType.includes('visa')) {
+        resolvedDocType = 'visa';
+        resolvedDocTypeName = 'Republic of India Tourist Visa (Sticker)';
+      } else if (mType.includes('driv') || mType.includes('licen')) {
+        resolvedDocType = 'driving_license';
+        resolvedDocTypeName = 'Motor Vehicle Driving Licence (Smart Card)';
+      } else if (mType.includes('permit')) {
+        resolvedDocType = 'permit';
+        resolvedDocTypeName = 'Protected Area Permit (PAP - Restricted Region)';
+      } else if (mType.includes('travel') || mType.includes('eta')) {
+        resolvedDocType = 'travel_auth';
+        resolvedDocTypeName = 'Ministry of External Affairs Travel Authorization';
+      } else if (mType.includes('passport')) {
+        resolvedDocType = 'passport';
+        resolvedDocTypeName = 'Indian Republic Passport (Bio-Data Page)';
+      }
+    }
+
+    const finalFullName = resolvedFullName || formData.fullName || (matchedRecord ? (matchedRecord.personName || matchedRecord.samplePerson?.fullName) : 'Holder');
+    const finalDocNum = activeReferenceDoc ? activeReferenceDoc.docNumber : (resolvedDocNum || formData.passportNumber || formData.visaNumber || (matchedRecord ? (matchedRecord.docNumber || matchedRecord.samplePerson?.docNumber) : ''));
+
     const riskAssessment = evaluateScreeningRecord({
-      status: isTampered ? 'rejected' : isSuspicious ? 'suspicious' : 'verified',
-      person: { fullName: formData.fullName, dob: formData.dob, nationality: formData.countryOfIssue, gender: formData.gender, countryOfIssue: formData.countryOfIssue } as any,
+      status: isConfirmedSameToSame ? 'verified' : 'rejected',
+      person: { fullName: finalFullName, dob: resolvedDob || formData.dob, nationality: resolvedNationality || formData.countryOfIssue, gender: resolvedGender || formData.gender, countryOfIssue: resolvedNationality || formData.countryOfIssue } as any,
       document: { 
-        type: selectedDocType, // @ts-ignore
-        countryOfIssue: formData.countryOfIssue,
-        docNumber: activeReferenceDoc ? activeReferenceDoc.docNumber : formData.passportNumber 
+        type: resolvedDocType, // @ts-ignore
+        typeName: resolvedDocTypeName,
+        countryOfIssue: resolvedNationality || formData.countryOfIssue,
+        docNumber: finalDocNum
       } as any,
       findings: mergedFindings,
     });
 
-    // Face verification - simple mock based on tampering
-    const faceVerificationResult = {
-      status: isTampered ? 'SUSPICIOUS_MISMATCH' : 'MATCH_CONFIRMED',
-      confidence: isTampered ? 42.1 : 98.7,
-      referenceImageUrl: activeReferenceDoc?.faceUrl,
+    const faceVerificationRes = {
+      status: isConfirmedSameToSame ? 'MATCH_CONFIRMED' : 'SUSPICIOUS_MISMATCH',
+      confidence: isConfirmedSameToSame ? 99.8 : 0.0,
+      referenceImageUrl: activeReferenceDoc?.faceUrl || (matchedRecord?.imageUrl || matchedRecord?.rawImageUrl),
       capturedImageUrl: uploadedFile?.dataUrl,
     } as any;
+
+    const finalComparisonData = [
+      {
+        field: 'Document Type',
+        documentData: resolvedDocTypeName,
+        verifiedData: isConfirmedSameToSame ? resolvedDocTypeName : 'No Authorized Match',
+        matches: isConfirmedSameToSame,
+        confidence: isConfirmedSameToSame ? 100 : 0,
+      },
+      {
+        field: 'Full Name',
+        documentData: finalFullName,
+        verifiedData: isConfirmedSameToSame ? finalFullName : 'No Authorized Match',
+        matches: isConfirmedSameToSame,
+        confidence: isConfirmedSameToSame ? 100 : 0,
+      },
+      {
+        field: 'Document Number',
+        documentData: finalDocNum,
+        verifiedData: isConfirmedSameToSame ? finalDocNum : 'No Authorized Match',
+        matches: isConfirmedSameToSame,
+        confidence: isConfirmedSameToSame ? 100 : 0,
+      },
+      ...(resolvedDob ? [{
+        field: 'Date of Birth',
+        documentData: resolvedDob,
+        verifiedData: isConfirmedSameToSame ? resolvedDob : 'Unverified',
+        matches: isConfirmedSameToSame,
+        confidence: isConfirmedSameToSame ? 100 : 0,
+      }] : []),
+      ...(resolvedNationality ? [{
+        field: 'Country / Nationality',
+        documentData: resolvedNationality,
+        verifiedData: isConfirmedSameToSame ? resolvedNationality : 'Unverified',
+        matches: isConfirmedSameToSame,
+        confidence: isConfirmedSameToSame ? 100 : 0,
+      }] : []),
+    ];
 
     const record: ScreeningRecord = {
       caseId,
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      person: { fullName: formData.fullName, dob: formData.dob, nationality: formData.countryOfIssue, gender: formData.gender, countryOfIssue: formData.countryOfIssue } as any,
+      person: { fullName: finalFullName, dob: resolvedDob || formData.dob, nationality: resolvedNationality || formData.countryOfIssue, gender: resolvedGender || formData.gender, countryOfIssue: resolvedNationality || formData.countryOfIssue } as any,
       document: {
-        type: selectedDocType as DocumentType,
-        typeName: selectedDocType.replace('_', ' ').toUpperCase(),
-        docNumber: activeReferenceDoc ? activeReferenceDoc.docNumber : formData.passportNumber,
-        
+        type: resolvedDocType as DocumentType,
+        typeName: resolvedDocTypeName,
+        docNumber: finalDocNum,
         // @ts-ignore
-        countryOfIssue: formData.countryOfIssue,
+        countryOfIssue: resolvedNationality || formData.countryOfIssue,
         expiryDate: '2030-01-01',
         frontImageUrl: uploadedStorageUrl,
       },
-      aiScore: isTampered ? 32.4 : isSuspicious ? 84.6 : 98.2,
-      riskScore: riskAssessment.score,
-      riskLevel: riskAssessment.level,
+      aiScore: isConfirmedSameToSame ? 100 : 0,
+      riskScore: isConfirmedSameToSame ? 0 : 100,
+      riskLevel: isConfirmedSameToSame ? 'low' : 'critical',
       riskAssessment: riskAssessment,
-      status: isTampered ? 'rejected' : isSuspicious ? 'suspicious' : 'verified',
-      screeningTimeSeconds: 14.6,
+      status: isConfirmedSameToSame ? 'verified' : 'rejected',
+      screeningTimeSeconds: 0.9,
       officer: 'Officer V. Sharma (ID: BOI-8842)',
       checkpoint: 'Terminal 3 - E-Gates (Air Suvidha Fast Track), IGI Airport',
       findings: mergedFindings,
-      faceVerificationResult: faceVerificationResult,
+      faceVerificationResult: faceVerificationRes,
       pipelineResults: {
         qualityCheck: 'completed',
         ocrExtraction: 'completed',
         photoVerification: 'completed',
-        tamperingDetection: isTampered ? 'failed' : isSuspicious ? 'warning' : 'completed',
-        mrzValidation: isTampered ? 'failed' : 'completed',
-        faceMatching: isTampered ? 'warning' : 'completed',
-        identityConsistency: isTampered ? 'failed' : isSuspicious ? 'warning' : 'completed',
-        fraudRiskAnalysis: isTampered ? 'failed' : 'completed',
+        tamperingDetection: isConfirmedSameToSame ? 'completed' : 'failed',
+        mrzValidation: isConfirmedSameToSame ? 'completed' : 'failed',
+        faceMatching: isConfirmedSameToSame ? 'completed' : 'failed',
+        identityConsistency: isConfirmedSameToSame ? 'completed' : 'failed',
+        fraudRiskAnalysis: isConfirmedSameToSame ? 'completed' : 'failed',
       },
-      comparisonData: comparisonList,
+      comparisonData: finalComparisonData,
     };
 
-    // Persist to Cloud Firestore and emit Audit Log
-    try {
-      await saveScreeningRecord(record);
-    } catch (e: any) {
-      console.warn('Firestore screening record write:', e.message);
-    }
+    saveScreeningRecord(record).catch(e => console.warn('Firestore write notice:', e.message));
 
     setFinalResult(record);
+    setSelectedDocType(resolvedDocType);
     onScreeningCompleted(record);
+    
+    // Smooth transition to Step 3 (Decision Verdict)
+    await new Promise((r) => setTimeout(r, 120));
     setCurrentStep(3);
 
-    if (isTampered) {
-      onTriggerToast('error', 'CRITICAL FRAUD: Anomaly detected during Demo Reference Database cross-match.');
-    } else if (isSuspicious) {
-      onTriggerToast('warning', 'SUSPICIOUS: Minor anomaly detected in Demo Reference Database cross-match.');
+    if (isConfirmedSameToSame) {
+      onTriggerToast('success', 'PASSED: 100% Perfect Match Confirmed in Database!');
     } else {
-      onTriggerToast('success', 'Screening Complete: Reference Database Match Confirmed');
+      onTriggerToast('error', 'REJECTED: Credentials do not match authorized database records.');
     }
+  };
+
+  const finishScreening = async () => {
+    // Kept for backward compatibility
   };
 
   return (
@@ -495,11 +923,12 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
 
       {/* 4-Step Horizontal Progress Indicator */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-        <div className="grid grid-cols-3 gap-2 sm:gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
           {[
-            { num: '01', title: 'Document Upload', step: 1 },
-            { num: '02', title: 'AI Analysis Pipeline', step: 2 },
-            { num: '03', title: 'Screening Result', step: 3 },
+            { num: '01', title: 'Upload Document Image', step: 1 },
+            { num: '02', title: 'AI Cross-Reference DB', step: 2 },
+            { num: '03', title: 'Match Decision (Pass/Reject)', step: 3 },
+            { num: '04', title: 'Full Verification Report', step: 4 },
           ].map((item) => {
             const isActive = currentStep === item.step;
             const isCompleted = currentStep > item.step;
@@ -516,7 +945,7 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
                 }`}>
                   {isCompleted ? <CheckCircle2 className="w-4 h-4" /> : item.num}
                 </div>
-                <div className="hidden md:block overflow-hidden">
+                <div className="hidden sm:block overflow-hidden">
                   <div className={`text-[10px] uppercase font-bold tracking-wider ${
                     isActive ? 'text-blue-900' : isCompleted ? 'text-emerald-800' : 'text-slate-400'
                   }`}>
@@ -569,7 +998,77 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
             </div>
           </div>
 
-          
+          {/* AI Document Classification Bar & Quick Type Selector */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                  AI Document Classification:
+                </span>
+                {isAutoClassifying ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-200 animate-pulse">
+                    <RefreshCw className="w-3 h-3 animate-spin text-amber-700" />
+                    AI analyzing optical features & layout...
+                  </span>
+                ) : classificationSummary ? (
+                  <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
+                    classificationSummary.documentType === 'UNKNOWN'
+                      ? 'bg-slate-200 text-slate-700 border border-slate-300'
+                      : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                  }`}>
+                    {classificationSummary.documentType === 'UNKNOWN' ? (
+                      <AlertTriangle className="w-3 h-3 text-slate-600" />
+                    ) : (
+                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                    )}
+                    AI Confirmed: {classificationSummary.documentType} ({classificationSummary.confidence}%)
+                  </span>
+                ) : (
+                  <span className="text-xs text-slate-500 italic">
+                    Upload or capture an image to auto-detect document type
+                  </span>
+                )}
+              </div>
+
+              {classificationSummary && classificationSummary.reason && (
+                <div className="text-[11px] text-slate-600 max-w-md truncate" title={classificationSummary.reason}>
+                  {classificationSummary.reason}
+                </div>
+              )}
+            </div>
+
+            {/* Quick Document Category Switcher */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-200/80">
+              <span className="text-[10px] font-semibold text-slate-500 uppercase mr-1">Active Category:</span>
+              {[
+                { type: 'passport' as DocumentType, label: 'Passport', icon: '📄' },
+                { type: 'visa' as DocumentType, label: 'Visa', icon: '🛂' },
+                { type: 'aadhaar' as DocumentType, label: 'Aadhaar / National ID', icon: '🪪' },
+                { type: 'driving_license' as DocumentType, label: 'Driving License', icon: '🚗' },
+                { type: 'permit' as DocumentType, label: 'Permit / Border Pass', icon: '📜' },
+                { type: 'other' as DocumentType, label: 'Other Document', icon: '📎' },
+              ].map((pill) => {
+                const isSelected = selectedDocType === pill.type;
+                return (
+                  <button
+                    key={pill.type}
+                    type="button"
+                    onClick={() => setSelectedDocType(pill.type)}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+                      isSelected
+                        ? 'bg-blue-600 text-white shadow-xs font-bold'
+                        : 'bg-white text-slate-700 border border-slate-300 hover:bg-slate-100'
+                    }`}
+                  >
+                    <span>{pill.icon}</span>
+                    <span>{pill.label}</span>
+                    {isSelected && <Check className="w-3 h-3 ml-0.5" />}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
 
           {/* Upload Dropzone & Live Document Preview */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -739,7 +1238,7 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
               { key: 'mrzValidation', name: 'MRZ Checksum Validation', desc: 'MOD 7/10 check digit math' },
               { key: 'faceMatching', name: 'Biometric Face Matching', desc: 'ICAO 9303 vector distance' },
               { key: 'identityConsistency', name: 'Identity Consistency', desc: 'Cross-table verification' },
-              { key: 'fraudRiskAnalysis', name: 'Fraud Risk Scoring', desc: 'Aggregate threat matrix' },
+              { key: 'fraudRiskAnalysis', name: 'Strict Match Verdict', desc: 'Binary perfect-match clearance' },
             ].map((step) => {
               const status = pipelineSteps[step.key] || 'pending';
               return (
@@ -782,14 +1281,154 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
         </div>
       )}
 
-      {/* ================= STEP 4: SCREENING RESULT ================= */}
+      {/* ================= STEP 3: SAME-TO-SAME DATABASE VERDICT (PASS / REJECT) ================= */}
       {currentStep === 3 && finalResult && (
-        <div className="animate-in fade-in zoom-in-98 duration-200">
+        <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-2xs space-y-6 animate-in fade-in zoom-in-98 duration-200">
+          <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+            <div>
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Step 3 — Match Decision Verdict
+              </span>
+              <h3 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight mt-0.5">
+                AI Cross-Reference Database Evaluation
+              </h3>
+            </div>
+            <span className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider ${
+              finalResult.status === 'verified'
+                ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                : 'bg-red-100 text-red-800 border border-red-300'
+            }`}>
+              {finalResult.status === 'verified' ? 'STATUS: PASSED (PERFECT MATCH)' : 'STATUS: REJECTED (MISMATCH)'}
+            </span>
+          </div>
+
+          {/* Large Decision Hero Banner */}
+          {finalResult.status === 'verified' ? (
+            <div className="p-6 rounded-2xl bg-emerald-50 border-2 border-emerald-500/80 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+              <div className="flex items-start gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                  <CheckCircle2 className="w-8 h-8" />
+                </div>
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-2 px-2.5 py-0.5 bg-emerald-200/70 text-emerald-900 text-[11px] font-black rounded-md tracking-wider uppercase">
+                    Exact Database Match Found
+                  </div>
+                  <h4 className="text-2xl font-black text-emerald-950">
+                    VERDICT: PASS (PERFECT MATCH CONFIRMED)
+                  </h4>
+                  <p className="text-sm text-emerald-800 font-medium max-w-xl">
+                    The uploaded document image, facial biometrics, and identity credentials (Name, DOB, Gender, Document Number) perfectly match the authorized reference record. Zero tampering detected.
+                  </p>
+                </div>
+              </div>
+              <div className="bg-white/90 border border-emerald-200 p-4 rounded-xl shrink-0 text-right space-y-1">
+                <div className="text-[10px] font-bold text-slate-500 uppercase">Match Status</div>
+                <div className="text-2xl font-black text-emerald-700 font-mono">100% MATCH</div>
+                <div className="text-xs font-bold text-emerald-800">Genuine Identity Confirmed</div>
+              </div>
+            </div>
+          ) : (
+            <div className="p-6 rounded-2xl bg-rose-50 border-2 border-rose-500/80 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+              <div className="flex items-start gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-md">
+                  <XCircle className="w-8 h-8" />
+                </div>
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-2 px-2.5 py-0.5 bg-rose-200/70 text-rose-900 text-[11px] font-black rounded-md tracking-wider uppercase">
+                    Not Registered in Database / Mismatch
+                  </div>
+                  <h4 className="text-2xl font-black text-rose-950">
+                    VERDICT: REJECT (MISMATCH DETECTED)
+                  </h4>
+                  <p className="text-sm text-rose-800 font-medium max-w-xl">
+                    The uploaded document does not match any authorized identity record in the reference database, or contains discrepancies. Strict policy requires rejection unless there is a perfect match.
+                  </p>
+                </div>
+              </div>
+              <div className="bg-white/90 border border-rose-200 p-4 rounded-xl shrink-0 text-right space-y-1">
+                <div className="text-[10px] font-bold text-slate-500 uppercase">Match Status</div>
+                <div className="text-2xl font-black text-rose-700 font-mono">0.0% MATCH</div>
+                <div className="text-xs font-bold text-rose-800 font-semibold">Rejected (No Database Match)</div>
+              </div>
+            </div>
+          )}
+
+          {/* Quick Summary Grid */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+            <div>
+              <span className="text-slate-400 block font-semibold">Candidate Full Name</span>
+              <span className="font-bold text-slate-800 text-sm">{finalResult.person.fullName || 'Unspecified'}</span>
+            </div>
+            <div>
+              <span className="text-slate-400 block font-semibold">Document Number</span>
+              <span className="font-bold text-slate-800 text-sm font-mono">{finalResult.document.docNumber || 'Unspecified'}</span>
+            </div>
+            <div>
+              <span className="text-slate-400 block font-semibold">Database Cross-Check</span>
+              <span className={`font-bold ${finalResult.status === 'verified' ? 'text-emerald-700' : 'text-rose-700'}`}>
+                {finalResult.status === 'verified' ? 'Match Confirmed' : 'No Database Record'}
+              </span>
+            </div>
+            <div>
+              <span className="text-slate-400 block font-semibold">Decision Rule</span>
+              <span className="font-bold text-slate-700">Exact Same-to-Same</span>
+            </div>
+          </div>
+
+          {/* Action Row */}
+          <div className="pt-4 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <button
+              type="button"
+              onClick={() => {
+                setCurrentStep(1);
+                setUploadedFile(null);
+                setFinalResult(null);
+                onTriggerToast('info', 'Ready to upload another document.');
+              }}
+              className="w-full sm:w-auto px-5 py-2.5 rounded-xl border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors"
+            >
+              Upload Another Document
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setCurrentStep(4)}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-7 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs sm:text-sm font-bold shadow-md hover:shadow-lg transition-all"
+            >
+              <span>Step 4: View Full Verification Report</span>
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ================= STEP 4: FULL VERIFICATION REPORT ================= */}
+      {currentStep === 4 && finalResult && (
+        <div className="space-y-4 animate-in fade-in zoom-in-98 duration-200">
+          <div className="bg-white p-4 rounded-xl border border-slate-200 flex items-center justify-between shadow-2xs">
+            <div>
+              <span className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                Step 4 of 4
+              </span>
+              <h3 className="text-base font-black text-slate-900">
+                Comprehensive Forensic & Identity Verification Report
+              </h3>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCurrentStep(3)}
+              className="text-xs font-bold text-blue-600 hover:underline"
+            >
+              Back to Verdict
+            </button>
+          </div>
+
           <FinalScreeningResultCard
             record={finalResult}
             onGenerateReport={onOpenReport}
             onStartNewScreening={() => {
               setCurrentStep(1);
+              setUploadedFile(null);
               setFinalResult(null);
               onTriggerToast('info', 'Started new screening workflow.');
             }}

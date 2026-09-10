@@ -10,6 +10,8 @@ export type DocumentType =
 export type RiskLevel = 'low' | 'moderate_low' | 'medium' | 'high' | 'critical';
 
 export type RiskScoreBand = 
+  | 'PERFECT MATCH (PASSED)'
+  | 'MISMATCH (REJECTED)'
   | 'LOW RISK' 
   | 'MODERATE-LOW RISK' 
   | 'MEDIUM RISK' 
@@ -17,6 +19,8 @@ export type RiskScoreBand =
   | 'CRITICAL RISK';
 
 export type RecommendedAction = 
+  | 'STANDARD CLEARANCE (100% MATCH)'
+  | 'REJECT ADMISSION (MISMATCH)'
   | 'STANDARD CLEARANCE' 
   | 'ROUTINE VERIFICATION' 
   | 'SECONDARY INSPECTION' 
@@ -135,6 +139,8 @@ export interface ReferenceDocument {
   tamperHeatmapUrl?: string;
   imageThumbnail: string; // SVG or color badge
   rawImageUrl?: string;
+  imageUrl?: string;
+  svgContent?: string;
 }
 
 export interface ScreeningRecord {

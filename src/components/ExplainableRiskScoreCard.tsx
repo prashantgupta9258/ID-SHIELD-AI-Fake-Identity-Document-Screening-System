@@ -319,60 +319,52 @@ export const ExplainableRiskScoreCard: React.FC<ExplainableRiskScoreCardProps> =
       <div className="p-5 sm:p-6 space-y-6">
         {/* Score & Band Hero Row */}
         <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-center">
-          {/* Left: Big Score & Band */}
+          {/* Left: Binary Match Status */}
           <div className="md:col-span-5 flex flex-col justify-center border-b md:border-b-0 md:border-r border-slate-100 pb-5 md:pb-0 md:pr-6">
             <div className="flex items-baseline gap-2">
               <span className="text-xs font-extrabold uppercase tracking-wider text-slate-500">
-                Risk Score:
+                Match Status:
               </span>
-              <span className="text-4xl sm:text-5xl font-black text-slate-900 tracking-tight font-mono">
-                {currentAssessment.score}
+              <span className={`text-3xl sm:text-4xl font-black tracking-tight font-mono ${
+                currentAssessment.score <= 20 ? 'text-emerald-700' : 'text-red-700'
+              }`}>
+                {currentAssessment.score <= 20 ? '100%' : '0.0%'}
               </span>
-              <span className="text-xl font-bold text-slate-400 font-mono">
-                / 100
+              <span className="text-xs font-bold text-slate-500 font-mono">
+                {currentAssessment.score <= 20 ? 'PERFECT MATCH' : 'MISMATCH'}
               </span>
             </div>
 
             <div className="mt-2.5">
-              <span className="text-[11px] font-bold text-slate-500 block mb-1">Risk Level:</span>
+              <span className="text-[11px] font-bold text-slate-500 block mb-1">Clearance Decision:</span>
               <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-black uppercase tracking-wider border ${bandInfo.badgeBg} ${bandInfo.badgeBorder} ${bandInfo.badgeText}`}>
                 {currentAssessment.score <= 20 ? (
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                ) : currentAssessment.score <= 40 ? (
-                  <Info className="w-4 h-4 text-blue-600" />
-                ) : currentAssessment.score <= 60 ? (
-                  <AlertCircle className="w-4 h-4 text-amber-600" />
                 ) : (
                   <AlertTriangle className="w-4 h-4 text-red-600" />
                 )}
-                {currentAssessment.band}
+                {currentAssessment.score <= 20 ? 'PASSED (PERFECT MATCH)' : 'REJECTED (MISMATCH)'}
               </span>
             </div>
 
-            {/* Visual Risk Band Scale Bar */}
+            {/* Visual Strict Binary Match Bar */}
             <div className="mt-4 space-y-1.5">
               <div className="h-3 w-full bg-slate-100 rounded-full overflow-hidden flex relative p-0.5 border border-slate-200">
-                {/* 5 Band segments */}
-                <div className="w-[20%] bg-emerald-500 h-full rounded-l-full" title="0–20: Low" />
-                <div className="w-[20%] bg-blue-500 h-full" title="21–40: Moderate-Low" />
-                <div className="w-[20%] bg-amber-500 h-full" title="41–60: Medium" />
-                <div className="w-[20%] bg-orange-500 h-full" title="61–80: High" />
-                <div className="w-[20%] bg-red-600 h-full rounded-r-full" title="81–100: Critical" />
-
-                {/* Needle Indicator */}
                 <div 
-                  style={{ left: `${Math.min(98, Math.max(2, currentAssessment.score))}%` }} 
-                  className="absolute top-[-2px] bottom-[-2px] w-2 bg-slate-900 rounded-full shadow-md -translate-x-1/2 ring-2 ring-white"
+                  className={`h-full transition-all duration-300 rounded-full ${
+                    currentAssessment.score <= 20 ? 'bg-emerald-500 w-full' : 'bg-red-600 w-full'
+                  }`} 
                 />
               </div>
 
-              {/* Band Labels */}
-              <div className="flex justify-between text-[9px] font-bold text-slate-400 uppercase tracking-tight font-mono">
-                <span className="text-emerald-700">0–20 Low</span>
-                <span className="text-blue-700">21–40 Mod-Low</span>
-                <span className="text-amber-700">41–60 Med</span>
-                <span className="text-orange-700">61–80 High</span>
-                <span className="text-red-700">81–100 Crit</span>
+              {/* Strict Binary Policy Labels */}
+              <div className="flex justify-between text-[10px] font-bold uppercase tracking-tight font-mono">
+                <span className={currentAssessment.score <= 20 ? 'text-emerald-700 font-black' : 'text-slate-400'}>
+                  ✓ 100% PERFECT MATCH (PASS)
+                </span>
+                <span className={currentAssessment.score > 20 ? 'text-red-700 font-black' : 'text-slate-400'}>
+                  ✗ MISMATCH (REJECT)
+                </span>
               </div>
             </div>
           </div>

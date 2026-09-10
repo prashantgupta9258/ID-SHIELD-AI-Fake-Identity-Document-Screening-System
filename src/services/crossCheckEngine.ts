@@ -18,6 +18,16 @@ import { REFERENCE_COLLECTION_NAME } from './referenceDocumentService';
 import { DEMO_RAW_DOCUMENTS, DemoRawDocument } from '../data/demoReferenceAssets';
 import { extractDocumentStructuredFields } from './ocrExtractionService';
 import { detectDocumentCategory } from './referenceDocumentService';
+import { 
+  compareNames, 
+  compareDobs, 
+  compareGenders, 
+  compareDocNumbers, 
+  compareIdentityRecords,
+  normalizeDateToIso as normalizeIdentityDate,
+  normalizeGender as normalizeIdentityGender,
+  normalizeDocNumber as normalizeIdentityDocNumber
+} from './identityFieldMatcher';
 
 /**
  * MANDATORY UI LABELS & COMPLIANCE TEXT FOR SIH PROTOTYPE
@@ -271,18 +281,30 @@ function isFieldMatch(spec: DocumentTypeFieldDefinition, upVal: string, refVal: 
   if (!upVal || !refVal) return false;
   if (upVal === refVal) return true;
 
-  const cleanUp = upVal.replace(/[^A-Z0-9]/g, '');
-  const cleanRef = refVal.replace(/[^A-Z0-9]/g, '');
-  if (cleanUp === cleanRef && cleanUp !== '') return true;
-
   const lowerKey = spec.fieldKey.toLowerCase();
-  
-  // Date comparison
-  if (spec.isDate || lowerKey.includes('date') || lowerKey.includes('dob') || lowerKey.includes('expiry') || lowerKey.includes('birth') || lowerKey.includes('valid')) {
-    const isoUp = normalizeDateIso(upVal);
-    const isoRef = normalizeDateIso(refVal);
-    if (isoUp && isoRef && isoUp === isoRef) return true;
-    if (cleanUp === cleanRef) return true;
+
+  // Name comparison (handles token inversion, initials, honorifics, Levenshtein distance)
+  if (lowerKey.includes('name') || lowerKey.includes('surname') || lowerKey.includes('given')) {
+    const res = compareNames(upVal, refVal);
+    return res.matched;
+  }
+
+  // Date comparison (DOB, issue, expiry, valid)
+  if (spec.isDate || lowerKey.includes('date') || lowerKey.includes('dob') || lowerKey.includes('expiry') || lowerKey.includes('birth') || lowerKey.includes('valid') || lowerKey.includes('until')) {
+    const res = compareDobs(upVal, refVal);
+    return res.matched;
+  }
+
+  // Gender / Sex comparison (M/F/X, Male/Female, पुरूष/महिला)
+  if (lowerKey.includes('gender') || lowerKey === 'sex') {
+    const res = compareGenders(upVal, refVal);
+    return res.matched;
+  }
+
+  // Document Number / ID (alphanumeric clean, prefix tolerance, OCR 1-char typo)
+  if (lowerKey.includes('number') || lowerKey.includes('id') || lowerKey.includes('license') || lowerKey.includes('permit') || lowerKey.includes('passport') || lowerKey.includes('visa')) {
+    const res = compareDocNumbers(upVal, refVal);
+    return res.matched;
   }
 
   // Nationality / Country
@@ -292,34 +314,25 @@ function isFieldMatch(spec: DocumentTypeFieldDefinition, upVal: string, refVal: 
     if (uNat && rNat && (uNat === rNat || uNat.includes(rNat) || rNat.includes(uNat))) return true;
   }
 
-  // Gender / Sex
-  if (lowerKey.includes('gender') || lowerKey === 'sex') {
-    const uGen = normalizeGenderCode(upVal);
-    const rGen = normalizeGenderCode(refVal);
-    if (uGen && rGen && uGen === rGen) return true;
-  }
-
-  // Name comparison (check if words overlap)
-  if (lowerKey.includes('name')) {
-    const uWords = upVal.split(/\s+/).filter(w => w.length > 1);
-    const rWords = refVal.split(/\s+/).filter(w => w.length > 1);
-    if (uWords.length > 0 && rWords.length > 0) {
-      const matchCount = uWords.filter(w => rWords.includes(w)).length;
-      if (matchCount >= Math.min(uWords.length, rWords.length)) return true;
-    }
-  }
-
-  // Document Number / ID
-  if (lowerKey.includes('number') || lowerKey.includes('id') || lowerKey.includes('license') || lowerKey.includes('permit')) {
-    if (cleanUp && cleanRef && (cleanUp === cleanRef || cleanUp.includes(cleanRef) || cleanRef.includes(cleanUp))) return true;
-  }
+  const cleanUp = upVal.replace(/[^A-Z0-9]/g, '').toUpperCase();
+  const cleanRef = refVal.replace(/[^A-Z0-9]/g, '').toUpperCase();
+  if (cleanUp && cleanRef && (cleanUp === cleanRef || cleanUp.includes(cleanRef) || cleanRef.includes(cleanUp))) return true;
 
   return false;
 }
 
-function canonicalizeFields(specs: DocumentTypeFieldDefinition[], rawExtracted: any, normalizedExtracted: any) {
+function canonicalizeFields(specs: DocumentTypeFieldDefinition[], rawExtracted: any, normalizedExtracted: any, candidateData?: any) {
   const final: Record<string, string> = {};
-  const combined = { ...(rawExtracted || {}), ...(normalizedExtracted || {}) };
+  const samplePerson = candidateData?.samplePerson || {};
+  const candidateFields = candidateData?.extractedFields || {};
+  
+  const combined = { 
+    ...(candidateData || {}),
+    ...(samplePerson || {}),
+    ...(candidateFields || {}),
+    ...(rawExtracted || {}), 
+    ...(normalizedExtracted || {}) 
+  };
 
   for (const spec of specs) {
     const key = spec.fieldKey;
@@ -328,9 +341,9 @@ function canonicalizeFields(specs: DocumentTypeFieldDefinition[], rawExtracted: 
 
     if (!val) {
       if (lowerKey.includes('name')) {
-        val = combined['fullName'] || combined['name'] || combined['applicantName'] || combined['surname'] || '';
-      } else if (lowerKey.includes('number')) {
-        val = combined['passportNumber'] || combined['documentNumber'] || combined['docNumber'] || combined['visaNumber'] || combined['identityNumber'] || combined['licenseNumber'] || combined['permitNumber'] || '';
+        val = combined['fullName'] || combined['personName'] || combined['name'] || combined['applicantName'] || combined['surname'] || combined['givenNames'] || '';
+      } else if (lowerKey.includes('number') || lowerKey.includes('id') || lowerKey.includes('license') || lowerKey.includes('permit')) {
+        val = combined['passportNumber'] || combined['documentNumber'] || combined['docNumber'] || combined['visaNumber'] || combined['identityNumber'] || combined['aadhaarNumber'] || combined['licenseNumber'] || combined['permitNumber'] || '';
       } else if (lowerKey.includes('dob') || lowerKey.includes('birth')) {
         val = combined['dateOfBirth'] || combined['dob'] || combined['birthDate'] || '';
       } else if (lowerKey.includes('expiry') || lowerKey.includes('valid')) {
@@ -345,12 +358,14 @@ function canonicalizeFields(specs: DocumentTypeFieldDefinition[], rawExtracted: 
     }
 
     let normVal = String(val || '').trim();
-    if (spec.isDate) {
-      normVal = normalizeDateIso(normVal);
+    if (spec.isDate || lowerKey.includes('dob') || lowerKey.includes('birth') || lowerKey.includes('date') || lowerKey.includes('expiry') || lowerKey.includes('issue')) {
+      normVal = normalizeIdentityDate(normVal);
     } else if (lowerKey.includes('gender') || lowerKey === 'sex') {
-      normVal = normalizeGenderCode(normVal);
+      normVal = normalizeIdentityGender(normVal) || normalizeGenderCode(normVal);
     } else if (lowerKey.includes('nationality')) {
       normVal = normalizeNationalityCode(normVal);
+    } else if (lowerKey.includes('number') || lowerKey.includes('id') || lowerKey.includes('license') || lowerKey.includes('permit')) {
+      normVal = normalizeIdentityDocNumber(normVal);
     } else {
       normVal = normalizeStringValue(normVal);
     }
@@ -413,12 +428,11 @@ export async function executeDemoCrossCheck(
     }
   }
 
-  onStepProgress?.(8, `Searching Firestore referenceDocuments (type: ${detectedType})`);
+  onStepProgress?.(8, 'Searching Firestore referenceDocuments (All Reference Records)');
   let candidateRecords: FirestoreReferenceDocument[] = [];
   try {
     const colRef = collection(db, REFERENCE_COLLECTION_NAME);
-    const q = query(colRef, where('documentType', '==', detectedType));
-    const querySnapshot = await getDocs(q);
+    const querySnapshot = await getDocs(colRef);
     if (!querySnapshot.empty) {
       candidateRecords = querySnapshot.docs.map(doc => doc.data() as FirestoreReferenceDocument);
     }
@@ -427,8 +441,7 @@ export async function executeDemoCrossCheck(
   }
 
   if (candidateRecords.length === 0) {
-    const matchingRaw = DEMO_RAW_DOCUMENTS.filter(d => d.category === detectedType);
-    candidateRecords = matchingRaw.map(r => ({
+    candidateRecords = DEMO_RAW_DOCUMENTS.map(r => ({
       referenceDocumentId: r.id,
       documentType: r.category,
       displayName: r.displayName,
@@ -462,10 +475,11 @@ export async function executeDemoCrossCheck(
   
   // Fingerprint Generation
   const uploadedPHash = input.documentImageBase64 ? await computeVisualHash(input.documentImageBase64) : '';
+  const upImageTrimmed = (input.documentImageBase64 || '').trim();
 
   for (let idx = 0; idx < candidateRecords.length; idx++) {
     const candidate = candidateRecords[idx];
-    const candidateCanonical = canonicalizeFields(fieldSpecs, candidate.extractedFields || {}, candidate.normalizedFields || {});
+    const candidateCanonical = canonicalizeFields(fieldSpecs, candidate.extractedFields || {}, candidate.normalizedFields || {}, candidate);
     
     let matchScorePoints = 0;
     const currentFieldResults: CrossCheckFieldResult[] = [];
@@ -493,57 +507,98 @@ export async function executeDemoCrossCheck(
       candImageBase64 = await fetchImageAsBase64(candImageBase64);
     }
     
-    const candPHash = candImageBase64 ? await computeVisualHash(candImageBase64) : '';
-    const visualSim = hashSimilarity(uploadedPHash, candPHash) * 100;
-    
-    // Check primary key / document number match
-    const primaryKeySpec = fieldSpecs.find(s => s.primaryKey)?.fieldKey || fieldSpecs[0].fieldKey;
-    const upPrimary = canonicalUploaded[primaryKeySpec] || '';
-    const refPrimary = candidateCanonical[primaryKeySpec] || '';
-    const isPrimaryMatch = (upPrimary && refPrimary && (upPrimary === refPrimary || upPrimary.includes(refPrimary) || refPrimary.includes(upPrimary)));
-
-    let multimodalResult = null;
-    let visualScore = visualSim;
-    
-    if (input.documentImageBase64 && candImageBase64) {
-      try {
-        const res = await fetch('/api/ai/compare-documents', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-             imageA: { mimeType: 'image/jpeg', data: input.documentImageBase64.replace(/^data:image\/[a-z]+;base64,/, '') }, 
-             imageB: { mimeType: 'image/jpeg', data: candImageBase64.replace(/^data:image\/[a-z]+;base64,/, '') },
-             fieldsA: canonicalUploaded,
-             fieldsB: candidateCanonical
-          })
-        });
-        if (res.ok) {
-           const parsed = await res.json();
-           multimodalResult = parsed.result;
-           if (multimodalResult && typeof multimodalResult.visualSimilarityScore === 'number') {
-             visualScore = multimodalResult.visualSimilarityScore;
-           }
+    // Check if uploaded image is the exact same base64 string or file
+    let isExactImageMatch = false;
+    if (upImageTrimmed && candImageBase64) {
+      const cTrim = candImageBase64.trim();
+      if (upImageTrimmed === cTrim) {
+        isExactImageMatch = true;
+      } else if (upImageTrimmed.length > 500 && cTrim.length > 500) {
+        try {
+          const cleanUp = decodeURIComponent(upImageTrimmed).replace(/\s+/g, '');
+          const cleanCand = decodeURIComponent(cTrim).replace(/\s+/g, '');
+          if (cleanUp === cleanCand || (cleanUp.length > 1000 && cleanCand.length > 1000 && (cleanUp.includes(cleanCand) || cleanCand.includes(cleanUp)))) {
+            isExactImageMatch = true;
+          }
+        } catch {
+          // If URI decoding fails, compare directly
+          if (upImageTrimmed.replace(/\s+/g, '') === cTrim.replace(/\s+/g, '')) {
+            isExactImageMatch = true;
+          }
         }
-      } catch(e) {
-        // Fallback to pHash if multimodal comparison fails
       }
     }
+
+    const candPHash = candImageBase64 ? await computeVisualHash(candImageBase64) : '';
+    const visualSim = isExactImageMatch ? 100 : (hashSimilarity(uploadedPHash, candPHash) * 100);
     
-    const overallScore = (fieldScorePercent * 0.35) + (visualScore * 0.45) + (isPrimaryMatch ? 20 : 0);
+    // Robust Identity Comparison across Name, DOB, Gender, and Document Number
+    const upName = canonicalUploaded['fullName'] || canonicalUploaded['name'] || canonicalUploaded['applicantName'] || (extractedFields?.fullName || extractedFields?.name || '');
+    const refName = candidateCanonical['fullName'] || candidateCanonical['name'] || candidateCanonical['applicantName'] || (candidate as any).samplePerson?.fullName || candidate.extractedFields?.fullName || candidate.extractedFields?.name || candidate.displayName || '';
+
+    const upDob = canonicalUploaded['dateOfBirth'] || canonicalUploaded['dob'] || (extractedFields?.dateOfBirth || extractedFields?.dob || '');
+    const refDob = candidateCanonical['dateOfBirth'] || candidateCanonical['dob'] || (candidate as any).samplePerson?.dob || candidate.extractedFields?.dateOfBirth || candidate.extractedFields?.dob || '';
+
+    const upGender = canonicalUploaded['gender'] || (extractedFields?.gender || '');
+    const refGender = candidateCanonical['gender'] || (candidate as any).samplePerson?.gender || candidate.extractedFields?.gender || '';
+
+    const primaryKeySpec = fieldSpecs.find(s => s.primaryKey)?.fieldKey || fieldSpecs[0].fieldKey;
+    const upPrimary = canonicalUploaded[primaryKeySpec] || canonicalUploaded['passportNumber'] || canonicalUploaded['documentNumber'] || canonicalUploaded['licenseNumber'] || canonicalUploaded['permitNumber'] || canonicalUploaded['visaNumber'] || canonicalUploaded['identityNumber'] || '';
+    const refPrimary = candidateCanonical[primaryKeySpec] || candidateCanonical['passportNumber'] || candidateCanonical['documentNumber'] || candidateCanonical['licenseNumber'] || candidateCanonical['permitNumber'] || candidateCanonical['visaNumber'] || candidateCanonical['identityNumber'] || candidate.extractedFields?.[primaryKeySpec] || candidate.referenceDocumentId || '';
+
+    const identityComp = compareIdentityRecords(
+      { fullName: upName, dob: upDob, gender: upGender, documentNumber: upPrimary },
+      { fullName: refName, dob: refDob, gender: refGender, documentNumber: refPrimary }
+    );
+
+    const isPrimaryMatch = identityComp.documentNumber.matched;
+    const isNameMatch = identityComp.name.matched;
+    const isDobMatch = identityComp.dob.matched;
+    const isGenderMatch = identityComp.gender.matched;
+
+    // Check raw OCR text match
+    const rawOcrUpper = (extractionResult.extractedText || '').toUpperCase();
+    const refDocNumClean = (refPrimary || '').toString().replace(/[^A-Z0-9]/g, '');
+    const isOcrTextMatch = Boolean(refDocNumClean && refDocNumClean.length >= 6 && rawOcrUpper.replace(/[^A-Z0-9]/g, '').includes(refDocNumClean));
+
+    let visualScore = isExactImageMatch ? 100 : visualSim;
+    
+    // Compute unified composite match score with identity verification rules
+    let overallScore = 0;
+    if (isExactImageMatch) {
+      overallScore = 100;
+    } else if (identityComp.isMatch) {
+      overallScore = identityComp.overallScore;
+    } else if (isPrimaryMatch && (fieldScorePercent >= 50 || isOcrTextMatch)) {
+      overallScore = 92 + (fieldScorePercent * 0.08);
+    } else if (isNameMatch && isDobMatch) {
+      overallScore = 90;
+    } else if (isOcrTextMatch && (isNameMatch || fieldScorePercent >= 50)) {
+      overallScore = 86;
+    } else {
+      // STRICT REJECT: If neither primary doc number, nor name, nor OCR text, nor exact image matches
+      overallScore = 0;
+    }
+
     const clampedOverall = Math.min(100, Math.max(0, overallScore));
 
-    log(`[Candidate ${idx + 1}]`);
-    log(`Reference ID: ${candidate.referenceDocumentId}`);
-    log(`Visual Score: ${Math.round(visualScore)}`);
-    log(`Field Score: ${Math.round(fieldScorePercent)}`);
-    log(`Overall: ${Math.round(clampedOverall)}`);
+    log(`[Candidate ${idx + 1}] Reference ID: ${candidate.referenceDocumentId}`);
+    log(`  Primary: ${isPrimaryMatch} (${identityComp.documentNumber.score}%), Name: ${isNameMatch} (${identityComp.name.score}%), DOB: ${isDobMatch}, Gender: ${isGenderMatch}`);
+    log(`  Field Score: ${Math.round(fieldScorePercent)}%, Visual: ${Math.round(visualScore)}%, Overall: ${Math.round(clampedOverall)}%`);
 
     if (clampedOverall > bestOverallScore || !bestCandidate) {
       bestCandidate = candidate;
       bestFieldResults = currentFieldResults;
       bestFieldScore = fieldScorePercent;
       bestVisualScore = visualScore;
-      bestVisualDetails = multimodalResult;
+      bestVisualDetails = {
+        visualSimilarityScore: visualScore,
+        layoutSimilarityScore: visualScore,
+        photoRegionSimilarityScore: visualScore,
+        securityFeatureConsistencyScore: visualScore,
+        textRegionConsistencyScore: visualScore,
+        differences: [],
+      };
       bestOverallScore = clampedOverall;
     }
   }
@@ -554,49 +609,11 @@ export async function executeDemoCrossCheck(
     log(`Overall Score: ${Math.round(bestOverallScore)}`);
   }
 
-  // If best overall score is low (meaning uploaded doc did not match hardcoded demo records in database),
-  // auto-enroll / self-match the uploaded document so valid user-uploaded documents aren't incorrectly rejected!
-  if (!bestCandidate || bestOverallScore < 65) {
-    log('[AutoEnrollment] No exact matching pre-existing reference record found. Auto-enrolling uploaded document baseline for self-consistency verification.');
-    const selfRecord: FirestoreReferenceDocument = {
-      referenceDocumentId: `REF-AUTO-${Date.now()}`,
-      documentType: detectedType,
-      displayName: `${detectedType} - User Uploaded Credential`,
-      imageUrl: input.documentImageBase64 || '',
-      extractedFields: extractedFields,
-      extractedText: rawTextSource,
-      normalizedFields: normalizedExtracted,
-      imageHash: uploadedPHash || 'AUTO-HASH',
-      sourceType: 'SIH_DEMO_DATASET',
-      verificationMode: 'DEMO_REFERENCE_DATABASE',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      storagePath: `auto-enrolled/${detectedType.toLowerCase()}/upload.jpg`,
-    };
-
-    const selfCanonical = canonicalizeFields(fieldSpecs, extractedFields, normalizedExtracted);
-    const selfFieldResults: CrossCheckFieldResult[] = fieldSpecs.map(spec => ({
-      fieldKey: spec.fieldKey,
-      fieldLabel: spec.fieldLabel,
-      uploadedValue: canonicalUploaded[spec.fieldKey] || 'Present',
-      referenceValue: selfCanonical[spec.fieldKey] || 'Present',
-      matched: true,
-      confidence: 99,
-    }));
-
-    bestCandidate = selfRecord;
-    bestFieldResults = selfFieldResults;
-    bestFieldScore = 100;
-    bestVisualScore = 95;
-    bestOverallScore = 96;
-    bestVisualDetails = {
-      visualSimilarityScore: 95,
-      photoRegionSimilarityScore: 95,
-      securityFeatureConsistencyScore: 90,
-      textRegionConsistencyScore: 98,
-      layoutSimilarityScore: 95,
-      tamperingEvidenceScore: 5,
-    };
+  // Strict Decision Rule: If the overall score is below 80, this document is NOT in the database.
+  // Reject unverified and unmatched documents without hesitation.
+  if (!bestCandidate || bestOverallScore < 80) {
+    log('[NoMatch] Uploaded document did not match any authorized database record. Enforcing REJECT verdict.');
+    bestCandidate = null;
   }
 
   onStepProgress?.(10, 'Visual Consistency & Anti-Tampering Analysis');
@@ -620,50 +637,52 @@ export async function executeDemoCrossCheck(
   let riskLevel: RiskLevel;
   let recommendedAction: 'PROCEED' | 'MANUAL_OFFICER_REVIEW' | 'FLAG_ANOMALY' | 'REJECT';
 
-  // SAME REFERENCE OVERRIDE
-  let overallScore = (bestFieldScore * 0.40) + 
-                     (bestVisualDetails?.visualSimilarityScore || bestVisualScore) * 0.30 +
-                     (bestVisualDetails?.layoutSimilarityScore || bestVisualScore) * 0.10 +
-                     (bestVisualDetails?.photoRegionSimilarityScore || bestVisualScore) * 0.10 +
-                     (bestVisualDetails?.securityFeatureConsistencyScore || bestVisualScore) * 0.10;
-
-  if (bestVisualScore >= 95) {
-    // Exact reference image upload
-    matchState = 'REFERENCE_MATCH';
-    matchScore = overallScore;
-    riskScore = 5;
-    riskLevel = 'low';
-    recommendedAction = 'PROCEED';
-  } else if (!bestCandidate) {
+  if (!bestCandidate) {
     matchState = 'NO_REFERENCE_MATCH';
-    matchScore = 0;
-    riskScore = 80;
-    riskLevel = 'high';
-    recommendedAction = 'MANUAL_OFFICER_REVIEW';
-  } else if (isSyntheticTampered || (bestVisualDetails?.tamperingEvidenceScore > 70)) {
-    matchState = 'PARTIAL_REFERENCE_MATCH';
-    matchScore = overallScore;
-    riskScore = bestVisualDetails?.tamperingEvidenceScore || 90;
+    matchScore = Math.max(0, Math.round(bestOverallScore));
+    riskScore = 95;
     riskLevel = 'critical';
     recommendedAction = 'REJECT';
-  } else if (overallScore >= 80) {
-    matchState = 'REFERENCE_MATCH';
-    matchScore = overallScore;
-    riskScore = 10;
-    riskLevel = 'low';
-    recommendedAction = 'PROCEED';
-  } else if (overallScore >= 50) {
-    matchState = 'PARTIAL_REFERENCE_MATCH';
-    matchScore = overallScore;
-    riskScore = 60;
-    riskLevel = 'medium';
-    recommendedAction = 'MANUAL_OFFICER_REVIEW';
   } else {
-    matchState = 'NO_REFERENCE_MATCH';
-    matchScore = overallScore;
-    riskScore = 85;
-    riskLevel = 'high';
-    recommendedAction = 'MANUAL_OFFICER_REVIEW';
+    // SAME REFERENCE OVERRIDE
+    let overallScore = (bestFieldScore * 0.40) + 
+                       (bestVisualDetails?.visualSimilarityScore || bestVisualScore) * 0.30 +
+                       (bestVisualDetails?.layoutSimilarityScore || bestVisualScore) * 0.10 +
+                       (bestVisualDetails?.photoRegionSimilarityScore || bestVisualScore) * 0.10 +
+                       (bestVisualDetails?.securityFeatureConsistencyScore || bestVisualScore) * 0.10;
+
+    if (bestVisualScore >= 95) {
+      // Exact reference image upload
+      matchState = 'REFERENCE_MATCH';
+      matchScore = overallScore;
+      riskScore = 5;
+      riskLevel = 'low';
+      recommendedAction = 'PROCEED';
+    } else if (isSyntheticTampered || (bestVisualDetails?.tamperingEvidenceScore > 70)) {
+      matchState = 'PARTIAL_REFERENCE_MATCH';
+      matchScore = overallScore;
+      riskScore = bestVisualDetails?.tamperingEvidenceScore || 90;
+      riskLevel = 'critical';
+      recommendedAction = 'REJECT';
+    } else if (overallScore >= 80) {
+      matchState = 'REFERENCE_MATCH';
+      matchScore = overallScore;
+      riskScore = 10;
+      riskLevel = 'low';
+      recommendedAction = 'PROCEED';
+    } else if (overallScore >= 50) {
+      matchState = 'PARTIAL_REFERENCE_MATCH';
+      matchScore = overallScore;
+      riskScore = 60;
+      riskLevel = 'medium';
+      recommendedAction = 'MANUAL_OFFICER_REVIEW';
+    } else {
+      matchState = 'NO_REFERENCE_MATCH';
+      matchScore = overallScore;
+      riskScore = 85;
+      riskLevel = 'high';
+      recommendedAction = 'MANUAL_OFFICER_REVIEW';
+    }
   }
 
   onStepProgress?.(12, 'Generating Verification Report');

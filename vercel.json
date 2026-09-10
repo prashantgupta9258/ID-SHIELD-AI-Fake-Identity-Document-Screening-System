@@ -1,25 +1,14 @@
 {
   "version": 2,
-  "buildCommand": "npm run build",
-  "outputDirectory": "dist",
   "framework": "vite",
-  "functions": {
-    "server.ts": {
-      "maxDuration": 60,
-      "memory": 1024
-    }
-  },
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "/server.ts"
+      "source": "/api/(.*)",
+      "destination": "/api"
     },
     {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/index.html"
+      "source": "/(.*)",
+      "destination": "/index.html"
     }
   ]
 }

@@ -43,22 +43,71 @@ export function detectDocumentCategory(
 ): CanonicalDocumentType {
   const textUpper = (rawText + ' ' + fileName).toUpperCase();
 
-  if (textUpper.includes('PASSPORT') || textUpper.includes('ICAO 9303') || textUpper.includes('P<IND') || textUpper.includes('P<')) {
+  if (
+    textUpper.includes('PASSPORT') || 
+    textUpper.includes('पासपोर्ट') || 
+    textUpper.includes('ICAO 9303') || 
+    textUpper.includes('P<IND') || 
+    textUpper.includes('P<') ||
+    textUpper.includes('REPUBLIC OF INDIA')
+  ) {
     return 'PASSPORT';
   }
-  if (textUpper.includes('SCHENGEN') || textUpper.includes('VISA') || textUpper.includes('VC') || textUpper.includes('DURATION OF STAY')) {
+  if (
+    textUpper.includes('SCHENGEN') || 
+    textUpper.includes('VISA') || 
+    textUpper.includes('वीज़ा') || 
+    textUpper.includes('VC') || 
+    textUpper.includes('DURATION OF STAY')
+  ) {
     return 'VISA';
   }
-  if (textUpper.includes('AADHAAR') || textUpper.includes('UIDAI') || textUpper.includes('MERA AADHAAR') || textUpper.includes('NATIONAL ID')) {
+  if (
+    textUpper.includes('AADHAAR') || 
+    textUpper.includes('आधार') || 
+    textUpper.includes('UIDAI') || 
+    textUpper.includes('MERA AADHAAR') || 
+    textUpper.includes('PAN') || 
+    textUpper.includes('PERMANENT ACCOUNT') || 
+    textUpper.includes('INCOME TAX') || 
+    textUpper.includes('VOTER') || 
+    textUpper.includes('EPIC') || 
+    textUpper.includes('NATIONAL ID') ||
+    textUpper.includes('CITIZEN')
+  ) {
     return 'NATIONAL_ID';
   }
-  if (textUpper.includes('DRIVING LICENCE') || textUpper.includes('DRIVING LICENSE') || textUpper.includes('LMV') || textUpper.includes('TRANSPORT DEPARTMENT')) {
+  if (
+    textUpper.includes('DRIVING LICENCE') || 
+    textUpper.includes('DRIVING LICENSE') || 
+    textUpper.includes('DRIVER LICENSE') || 
+    textUpper.includes('चालक अनुज्ञप्ति') || 
+    textUpper.includes('ड्राइविंग') || 
+    textUpper.includes('LMV') || 
+    textUpper.includes('MCWG') || 
+    textUpper.includes('PARIVAHAN') || 
+    textUpper.includes('SARATHI') || 
+    textUpper.includes('TRANSPORT DEPARTMENT')
+  ) {
     return 'DRIVING_LICENSE';
   }
-  if (textUpper.includes('PERMIT') || textUpper.includes('RESTRICTED AREA') || textUpper.includes('SECURITY CLEARANCE') || textUpper.includes('RAP-')) {
+  if (
+    textUpper.includes('PERMIT') || 
+    textUpper.includes('RESTRICTED AREA') || 
+    textUpper.includes('PROTECTED AREA') || 
+    textUpper.includes('ILP') || 
+    textUpper.includes('SECURITY CLEARANCE') || 
+    textUpper.includes('RAP-') ||
+    textUpper.includes('PAP-')
+  ) {
     return 'PERMIT';
   }
-  if (textUpper.includes('TRAVEL AUTHORIZATION') || textUpper.includes('ETA-') || textUpper.includes('ELECTRONIC TRAVEL') || textUpper.includes('ESTA')) {
+  if (
+    textUpper.includes('TRAVEL AUTHORIZATION') || 
+    textUpper.includes('ETA-') || 
+    textUpper.includes('ELECTRONIC TRAVEL') || 
+    textUpper.includes('ESTA')
+  ) {
     return 'TRAVEL_AUTHORIZATION';
   }
 
@@ -280,3 +329,30 @@ export async function saveReferenceDocument(docData: FirestoreReferenceDocument)
     handleFirestoreError(error, OperationType.WRITE, `${REFERENCE_COLLECTION_NAME}/${docData.referenceDocumentId}`);
   }
 }
+
+// Restart & Reset Database: Clears existing reference records and re-seeds with updated benchmark documents
+export async function restartAndResetDatabase(
+  onProgressUpdate?: (progress: IngestionStepProgress) => void
+): Promise<FirestoreReferenceDocument[]> {
+  onProgressUpdate?.({
+    step: 0,
+    totalSteps: DEMO_RAW_DOCUMENTS.length + 1,
+    currentDocumentId: 'PURGING_PREVIOUS_DOCUMENTS',
+    stageName: 'Restarting Database',
+    percent: 5,
+    status: 'running',
+    message: 'Clearing and purging old records from reference database...',
+    recordsSynced: 0,
+  });
+
+  try {
+    const existingSnap = await getDocs(collection(db, REFERENCE_COLLECTION_NAME));
+    const deletePromises = existingSnap.docs.map((docSnap) => deleteDoc(docSnap.ref));
+    await Promise.all(deletePromises);
+  } catch (err) {
+    console.warn('Could not delete all old documents during restart:', err);
+  }
+
+  return await seedAllReferenceDocuments(onProgressUpdate);
+}
+

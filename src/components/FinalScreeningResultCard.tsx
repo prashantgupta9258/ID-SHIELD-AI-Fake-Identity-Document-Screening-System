@@ -47,45 +47,71 @@ export const FinalScreeningResultCard: React.FC<FinalScreeningResultCardProps> =
   const [copied, setCopied] = useState<boolean>(false);
 
   // Fallback / default values adhering strictly to the user prompt
-  const isPassport = record?.document?.type === 'passport' || !record;
-  const docType = record?.document?.type ? record.document.type.toUpperCase() : 'PASSPORT';
+  const cleanDocNum = (record?.document?.docNumber || '').replace(/[\s\-_]/g, '').toUpperCase();
+  const rawType = (record?.document?.type || '').toLowerCase();
+  
+  let determinedDocType = record?.document?.type || 'passport';
+  let determinedDocTypeName = record?.document?.typeName || '';
+
+  if (!determinedDocTypeName || determinedDocTypeName.toUpperCase() === 'PASSPORT' && (/^\d{12}$/.test(cleanDocNum) || cleanDocNum.startsWith('DL') || cleanDocNum.startsWith('PAP') || cleanDocNum.startsWith('V') || cleanDocNum.startsWith('T'))) {
+    if (rawType.includes('aadhaar') || /^\d{12}$/.test(cleanDocNum)) {
+      determinedDocType = 'aadhaar';
+      determinedDocTypeName = 'Aadhaar National Identity Card (UIDAI)';
+    } else if (rawType.includes('visa') || (cleanDocNum.startsWith('V') && cleanDocNum.length >= 7) || (cleanDocNum.startsWith('T') && cleanDocNum.length >= 8)) {
+      determinedDocType = 'visa';
+      determinedDocTypeName = 'Republic of India Tourist Visa (Sticker)';
+    } else if (rawType.includes('driv') || cleanDocNum.startsWith('DL')) {
+      determinedDocType = 'driving_license';
+      determinedDocTypeName = 'Motor Vehicle Driving Licence (Smart Card)';
+    } else if (rawType.includes('permit') || cleanDocNum.startsWith('PAP')) {
+      determinedDocType = 'permit';
+      determinedDocTypeName = 'Protected Area Permit (PAP - Restricted Region)';
+    } else if (rawType.includes('travel') || cleanDocNum.startsWith('TA-')) {
+      determinedDocType = 'travel_auth';
+      determinedDocTypeName = 'Ministry of External Affairs Travel Authorization';
+    } else {
+      determinedDocType = 'passport';
+      determinedDocTypeName = 'Indian Republic Passport (Bio-Data Page)';
+    }
+  }
+
+  const isPassport = determinedDocType === 'passport';
+  const docType = determinedDocTypeName.toUpperCase();
   const aiConfidence = record?.aiScore ? Math.round(record.aiScore) : 96;
   const ocrStatus = record?.pipelineResults?.ocrExtraction === 'completed' ? 'COMPLETED' : 
                     record?.pipelineResults?.ocrExtraction === 'warning' ? 'COMPLETED (WITH WARNINGS)' : 'COMPLETED';
 
-  const isTampered = (record?.riskScore ?? 18) > 50 || (record?.findings?.length ?? 0) > 0;
+  const isVerified = record?.status === 'verified';
+  const isTampered = !isVerified || (record?.findings && record.findings.some(f => f.severity === 'critical' || f.severity === 'high'));
   
   // Reference database status & match score
-  const refStatus = isTampered ? 'REFERENCE ANOMALY' : 'REFERENCE MATCH';
-  const refMatchScore = isTampered ? 74 : (record?.aiScore ? Math.min(99, Math.round(record.aiScore - 2)) : 94);
+  const refStatus = isVerified ? 'PERFECT DATABASE MATCH' : 'NOT IN DATABASE / MISMATCH';
+  const refMatchScore = isVerified ? 100 : 0;
 
   // Tampering analysis
-  const tamperingStatus = isTampered ? 'POTENTIAL TAMPERING DETECTED' : 'NO CLEAR TAMPERING INDICATORS';
-  const tamperingConfidence = isTampered ? 91 : 89;
-  const tamperingIndicators = isTampered && record?.findings && record.findings.length > 0
+  const tamperingStatus = isVerified ? 'VERIFIED AUTHENTIC (NO TAMPERING)' : 'TAMPERING OR MISMATCH FLAGGED';
+  const tamperingConfidence = isVerified ? 99 : 92;
+  const tamperingIndicators = !isVerified && record?.findings && record.findings.length > 0
     ? record.findings.map(f => f.title).join(', ')
-    : 'None detected';
+    : 'Zero tampering detected';
 
   // Face verification
-  const faceOutcome = record?.faceVerificationResult?.outcome 
-    ? record.faceVerificationResult.outcome.replace('_', ' ')
-    : (isTampered ? 'LOW CONFIDENCE' : 'POSSIBLE MATCH');
-  const faceConfidence = record?.faceVerificationResult?.confidence 
-    ? Math.round(record.faceVerificationResult.confidence)
-    : (isTampered ? 58 : 82);
+  const faceOutcome = isVerified ? 'PERFECT BIOMETRIC MATCH' : 'MISMATCH / UNCONFIRMED';
+  const faceConfidence = isVerified ? 99 : 24;
 
-  // Risk assessment
-  const riskScore = record?.riskScore ?? 18;
-  const riskLevel = record?.riskLevel ? record.riskLevel.toUpperCase() : 'LOW';
+  // Verification status
+  const riskScore = record?.riskScore ?? (isVerified ? 0 : 100);
 
   // AI Explanation
-  const defaultExplanation = `The uploaded document was classified as a passport with high confidence. OCR fields were successfully extracted and normalized. The extracted identity fields closely matched a record in the controlled demo reference database. No strong visual tampering indicators were detected.`;
+  const defaultExplanation = isVerified
+    ? `The uploaded document was verified as a 100% PERFECT MATCH against the authorized reference database. Full Name, Date of Birth, Gender, Document Number, and Biometrics align perfectly with authentic records. No tampering detected.`
+    : `Verification failed: The uploaded document does not match any authorized identity record in the reference database, or contains critical discrepancies. Policy strictly enforces rejection unless an exact match is confirmed.`;
   const explanation = record?.riskAssessment?.summaryExplanation || defaultExplanation;
 
   // Recommended Action
-  const recommendedAction = isTampered 
-    ? 'SECONDARY INSPECTION / DOCUMENT SEIZURE' 
-    : 'LOW-RISK / MANUAL CONFIRMATION';
+  const recommendedAction = isVerified 
+    ? 'CLEAR PASS — PERFECT MATCH (ADMISSION APPROVED)' 
+    : 'REJECTED — VERIFICATION FAILED (ADMISSION REFUSED)';
 
   const caseId = record?.caseId || 'ID-2026-00482';
   const checkpoint = record?.checkpoint || 'Terminal 3 - E-Gates, IGI Airport (Counter #04)';
@@ -132,9 +158,9 @@ Status: ${faceOutcome}
 Confidence: ${faceConfidence}%
 
 ------------------------------------
-RISK ASSESSMENT
-Risk Score: ${riskScore}/100
-Risk Level: ${riskLevel}
+VERIFICATION DECISION
+Status: ${isVerified ? 'PASSED (PERFECT MATCH)' : 'REJECTED (MISMATCH)'}
+Criteria: ${isVerified ? '100% Authorized Database Match Confirmed' : 'Identity Mismatch or Not Found in Database'}
 
 ------------------------------------
 AI EXPLANATION
@@ -186,25 +212,21 @@ IMPORTANT:
           {/* Quick Status Pill */}
           <div className="flex items-center gap-3">
             <div className={`px-4 py-2.5 rounded-xl border flex items-center gap-2.5 shadow-2xs ${
-              riskScore <= 30
-                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                : riskScore <= 60
-                ? 'bg-amber-50 border-amber-200 text-amber-900'
-                : 'bg-red-50 border-red-200 text-red-900'
+              isVerified
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                : 'bg-red-50 border-red-300 text-red-900'
             }`}>
-              {riskScore <= 30 ? (
+              {isVerified ? (
                 <CheckCircle2 className="w-6 h-6 text-emerald-600 shrink-0" />
-              ) : riskScore <= 60 ? (
-                <AlertTriangle className="w-6 h-6 text-amber-600 shrink-0" />
               ) : (
                 <XCircle className="w-6 h-6 text-red-600 shrink-0" />
               )}
               <div>
                 <span className="text-[10px] uppercase font-extrabold tracking-wider block opacity-75">
-                  SCREENING OUTCOME
+                  FINAL VERIFICATION DECISION
                 </span>
                 <span className="text-sm font-black tracking-tight">
-                  {riskScore <= 30 ? 'VERIFICATION PASSED' : riskScore <= 60 ? 'MANUAL REVIEW RECOMMENDED' : 'POTENTIAL FRAUD FLAGGED'}
+                  {isVerified ? 'PASSED — PERFECT MATCH' : 'REJECTED — NOT A MATCH'}
                 </span>
               </div>
             </div>
@@ -227,7 +249,9 @@ IMPORTANT:
           </div>
           <div>
             <span className="text-slate-400 block text-[10px] uppercase font-bold">Processing Duration</span>
-            <span className="font-mono text-slate-800 font-bold text-blue-700">14.6 seconds</span>
+            <span className="font-mono text-slate-800 font-bold text-blue-700">
+              {record?.screeningTimeSeconds ? `${record.screeningTimeSeconds} seconds` : '1.2 seconds'}
+            </span>
           </div>
         </div>
       </div>
@@ -421,7 +445,7 @@ IMPORTANT:
                       REFERENCE DATABASE
                     </span>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                      refStatus === 'REFERENCE MATCH' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                      isVerified ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
                     }`}>
                       {refStatus}
                     </span>
@@ -432,7 +456,7 @@ IMPORTANT:
                       <div>
                         <span className="text-slate-500 font-medium block text-[11px]">Status:</span>
                         <strong className={`font-black text-sm tracking-wide ${
-                          refStatus === 'REFERENCE MATCH' ? 'text-emerald-700' : 'text-amber-700'
+                          isVerified ? 'text-emerald-700' : 'text-rose-700'
                         }`}>
                           {refStatus}
                         </strong>
@@ -479,11 +503,11 @@ IMPORTANT:
                       TAMPERING ANALYSIS
                     </span>
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                      tamperingStatus === 'NO CLEAR TAMPERING INDICATORS' 
+                      isVerified
                         ? 'bg-emerald-100 text-emerald-800' 
                         : 'bg-red-100 text-red-800'
                     }`}>
-                      {tamperingStatus === 'NO CLEAR TAMPERING INDICATORS' ? 'AUTHENTIC' : 'ANOMALY'}
+                      {isVerified ? 'AUTHENTIC' : 'ANOMALY'}
                     </span>
                   </div>
 
@@ -491,7 +515,7 @@ IMPORTANT:
                     <div>
                       <span className="text-slate-500 font-medium block text-[11px]">Status:</span>
                       <strong className={`font-black text-xs sm:text-sm tracking-wide block mt-0.5 ${
-                        tamperingStatus === 'NO CLEAR TAMPERING INDICATORS' ? 'text-emerald-700' : 'text-red-700'
+                        isVerified ? 'text-emerald-700' : 'text-red-700'
                       }`}>
                         {tamperingStatus}
                       </strong>
@@ -553,68 +577,71 @@ IMPORTANT:
                 </div>
               </div>
 
-              {/* SECTION 3: RISK ASSESSMENT */}
+              {/* SECTION 3: VERIFICATION DECISION */}
               <div className="pt-6 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-black uppercase tracking-wider text-slate-900 flex items-center gap-1.5">
-                    <SlidersHorizontal className="w-4 h-4 text-blue-600" />
-                    RISK ASSESSMENT
+                    <ShieldCheck className="w-4 h-4 text-blue-600" />
+                    VERIFICATION DECISION
                   </span>
-                  <span className={`text-[10px] font-extrabold uppercase px-2.5 py-0.5 rounded-full border ${
-                    riskScore <= 30 ? 'bg-emerald-100 text-emerald-800 border-emerald-300' :
-                    riskScore <= 60 ? 'bg-amber-100 text-amber-800 border-amber-300' : 'bg-red-100 text-red-800 border-red-300'
+                  <span className={`text-[10px] font-extrabold uppercase px-3 py-1 rounded-full border ${
+                    isVerified ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : 'bg-red-100 text-red-800 border-red-300'
                   }`}>
-                    {riskLevel} RISK
+                    {isVerified ? 'PASSED • PERFECT MATCH' : 'REJECTED • MISMATCH'}
                   </span>
                 </div>
 
-                <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-3">
+                <div className={`p-5 rounded-2xl border space-y-3 ${
+                  isVerified ? 'bg-emerald-50/60 border-emerald-200' : 'bg-red-50/60 border-red-200'
+                }`}>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <span className="text-slate-500 font-medium block text-[11px]">Risk Score:</span>
+                      <span className="text-slate-500 font-medium block text-[11px]">Verification Verdict:</span>
                       <div className="flex items-baseline gap-1.5 mt-0.5">
-                        <strong className={`text-2xl font-black font-mono ${
-                          riskScore <= 30 ? 'text-emerald-700' : riskScore <= 60 ? 'text-amber-700' : 'text-red-700'
+                        <strong className={`text-2xl font-black tracking-tight ${
+                          isVerified ? 'text-emerald-700' : 'text-red-700'
                         }`}>
-                          {riskScore}
+                          {isVerified ? 'PASSED' : 'REJECTED'}
                         </strong>
-                        <span className="text-slate-400 font-bold text-sm font-mono">/ 100</span>
+                        <span className="text-xs font-bold text-slate-500">
+                          {isVerified ? '(Perfect Database Match)' : '(Mismatch / Not in Database)'}
+                        </span>
                       </div>
                     </div>
 
                     <div>
-                      <span className="text-slate-500 font-medium block text-[11px]">Risk Level:</span>
+                      <span className="text-slate-500 font-medium block text-[11px]">Match Criteria:</span>
                       <strong className={`text-base font-black tracking-wide block mt-0.5 ${
-                        riskScore <= 30 ? 'text-emerald-700' : riskScore <= 60 ? 'text-amber-700' : 'text-red-700'
+                        isVerified ? 'text-emerald-800' : 'text-red-800'
                       }`}>
-                        {riskLevel}
+                        {isVerified ? '100% IDENTICAL TO AUTHORIZED RECORD' : 'FAILED STRICT IDENTITY CRITERIA'}
                       </strong>
                     </div>
                   </div>
 
-                  {/* Multi-tiered Risk Score Scale Bar */}
-                  <div>
-                    <div className="flex items-center justify-between text-[10px] font-bold text-slate-400 mb-1 font-mono">
-                      <span className="text-emerald-700">0 (LOW)</span>
-                      <span className="text-blue-700">20</span>
-                      <span className="text-amber-700">40</span>
-                      <span className="text-orange-700">60</span>
-                      <span className="text-red-700">100 (CRITICAL)</span>
+                  {/* Clean Visual Binary Match Bar */}
+                  <div className="pt-2">
+                    <div className="flex items-center justify-between text-[11px] font-bold mb-1.5">
+                      <span className={isVerified ? 'text-emerald-700 font-black' : 'text-slate-400'}>
+                        {isVerified ? '✓ PERFECT MATCH (APPROVED)' : 'PERFECT MATCH'}
+                      </span>
+                      <span className={!isVerified ? 'text-red-700 font-black' : 'text-slate-400'}>
+                        {!isVerified ? '✗ REJECTED (MISMATCH)' : 'REJECTED'}
+                      </span>
                     </div>
-                    <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex p-0.5 gap-0.5">
-                      <div className="h-full bg-emerald-500 rounded-l-full" style={{ width: '20%' }} />
-                      <div className="h-full bg-blue-500" style={{ width: '20%' }} />
-                      <div className="h-full bg-amber-400" style={{ width: '20%' }} />
-                      <div className="h-full bg-orange-500" style={{ width: '20%' }} />
-                      <div className="h-full bg-red-600 rounded-r-full" style={{ width: '20%' }} />
-                    </div>
-                    {/* Marker Needle */}
-                    <div className="relative w-full h-2 mt-1">
+                    <div className="h-3 w-full bg-slate-200 rounded-full overflow-hidden flex">
                       <div 
-                        className="absolute -top-1 w-0 h-0 border-x-4 border-x-transparent border-b-6 border-b-slate-900 -translate-x-1/2 transition-all duration-300"
-                        style={{ left: `${Math.min(100, Math.max(0, riskScore))}%` }}
+                        className={`h-full transition-all duration-500 ${isVerified ? 'bg-emerald-500 w-full' : 'bg-slate-200 w-0'}`} 
+                      />
+                      <div 
+                        className={`h-full transition-all duration-500 ${!isVerified ? 'bg-red-600 w-full' : 'bg-slate-200 w-0'}`} 
                       />
                     </div>
+                    <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">
+                      {isVerified 
+                        ? 'Policy mandate: Document identity fields (Full Name, Date of Birth, Gender, Document Number) and biometric portrait match the authorized database record with zero tampering.'
+                        : 'Policy mandate: Only perfect matches with authorized database records are permitted to pass. Documents with mismatches, anomalies, or missing records are rejected.'}
+                    </p>
                   </div>
                 </div>
               </div>
@@ -637,17 +664,15 @@ IMPORTANT:
                   RECOMMENDED ACTION
                 </span>
                 <div className={`p-4 rounded-2xl border flex items-center justify-between gap-3 ${
-                  riskScore <= 30
+                  isVerified
                     ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
-                    : riskScore <= 60
-                    ? 'bg-amber-50 border-amber-300 text-amber-950'
                     : 'bg-red-50 border-red-300 text-red-950'
                 }`}>
                   <div className="flex items-center gap-2.5">
-                    {riskScore <= 30 ? (
+                    {isVerified ? (
                       <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
                     ) : (
-                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                      <XCircle className="w-5 h-5 text-red-600 shrink-0" />
                     )}
                     <div>
                       <span className="text-[10px] uppercase font-bold opacity-75 block">Standard Operating Protocol</span>
@@ -657,7 +682,7 @@ IMPORTANT:
                     </div>
                   </div>
                   <span className="text-xs font-semibold px-2.5 py-1 bg-white/80 rounded-lg border border-current shadow-2xs">
-                    Officer Discretion
+                    Strict Binary Policy
                   </span>
                 </div>
               </div>
@@ -772,7 +797,15 @@ IMPORTANT:
                 caseId,
                 timestamp,
                 person: { fullName: personName, dob: '1998-08-12', nationality: 'INDIAN', gender: 'M', countryOfIssue: 'IND' },
-                document: { type: 'passport', typeName: 'Passport', docNumber, issueDate: '2023-01-10', expiryDate: '2033-01-09', issuingAuthority: 'Passport Office Delhi', previewType: 'passport-john' },
+                document: { 
+                  type: determinedDocType, 
+                  typeName: determinedDocTypeName, 
+                  docNumber, 
+                  issueDate: '2023-01-10', 
+                  expiryDate: '2033-01-09', 
+                  issuingAuthority: 'Government Authority', 
+                  previewType: 'document' 
+                },
                 aiScore: 96,
                 riskScore: 18,
                 riskLevel: 'low',

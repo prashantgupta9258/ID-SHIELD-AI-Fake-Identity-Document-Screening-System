@@ -7,12 +7,13 @@ import {
   fallbackOcrExtraction,
   OcrExtractionPayload
 } from '../../server/ocrFieldExtractor';
+import { getApiUrl } from '../utils/apiConfig';
 
 export async function extractDocumentStructuredFields(
   payload: OcrExtractionPayload
 ): Promise<OcrExtractionResult> {
   try {
-    const response = await fetch('/api/ai/extract-fields', {
+    const response = await fetch(getApiUrl('/api/ai/extract-fields'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

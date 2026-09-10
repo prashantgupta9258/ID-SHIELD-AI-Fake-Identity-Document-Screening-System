@@ -26,9 +26,9 @@ service cloud.firestore {
              data.displayName.size() <= 200 &&
              data.imageUrl is string &&
              data.imageUrl.size() > 0 &&
-             data.imageUrl.size() <= 2048 &&
+             data.imageUrl.size() <= 500000 &&
              data.extractedText is string &&
-             data.extractedText.size() <= 10000 &&
+             data.extractedText.size() <= 50000 &&
              data.imageHash is string &&
              data.imageHash.size() > 0 &&
              data.imageHash.size() <= 128 &&
@@ -76,7 +76,7 @@ service cloud.firestore {
     match /referenceDocuments/{docId} {
       allow get, list: if true;
       allow create, update: if isValidId(docId) && isValidReferenceDocument(incoming());
-      allow delete: if false;
+      allow delete: if isValidId(docId);
     }
 
     // Screening Records Collection:
@@ -84,7 +84,7 @@ service cloud.firestore {
     match /screeningRecords/{caseId} {
       allow get, list: if true;
       allow create, update: if isValidId(caseId) && isValidScreeningRecord(incoming());
-      allow delete: if false;
+      allow delete: if isValidId(caseId);
     }
 
     // Official Reports Collection:

@@ -18,6 +18,7 @@ export interface VerificationQuery {
   docType: string;
   fullName: string;
   dob?: string;
+  gender?: string;
   countryOfIssue?: string;
   base64Image?: string;
   fileName?: string;
@@ -50,14 +51,22 @@ export class DemoReferenceDatabaseAdapter implements IVerificationAdapter {
     const cleanDocNum = (q.docNumber || '').trim().toUpperCase();
     const cleanName = (q.fullName || '').trim().toUpperCase();
 
-    // Map docType string to CanonicalDocumentType
+    // Map docType string to CanonicalDocumentType with intelligent pattern inference
     let canonicalType: CanonicalDocumentType = 'PASSPORT';
     const rawType = (q.docType || '').toUpperCase();
-    if (rawType.includes('VISA')) canonicalType = 'VISA';
-    else if (rawType.includes('AADHAAR') || rawType.includes('NATIONAL')) canonicalType = 'NATIONAL_ID';
-    else if (rawType.includes('DRIV') || rawType.includes('LICEN')) canonicalType = 'DRIVING_LICENSE';
-    else if (rawType.includes('PERMIT')) canonicalType = 'PERMIT';
-    else if (rawType.includes('TRAVEL') || rawType.includes('ETA')) canonicalType = 'TRAVEL_AUTHORIZATION';
+    if (rawType.includes('VISA') || (cleanDocNum.startsWith('V') && cleanDocNum.length >= 7) || (cleanDocNum.startsWith('T') && cleanDocNum.length >= 8)) {
+      canonicalType = 'VISA';
+    } else if (rawType.includes('AADHAAR') || rawType.includes('NATIONAL') || /^\d{12}$/.test(cleanDocNum.replace(/\s+/g, ''))) {
+      canonicalType = 'NATIONAL_ID';
+    } else if (rawType.includes('DRIV') || rawType.includes('LICEN') || cleanDocNum.startsWith('DL')) {
+      canonicalType = 'DRIVING_LICENSE';
+    } else if (rawType.includes('PERMIT') || cleanDocNum.startsWith('PAP')) {
+      canonicalType = 'PERMIT';
+    } else if (rawType.includes('TRAVEL') || rawType.includes('ETA') || cleanDocNum.startsWith('TA-')) {
+      canonicalType = 'TRAVEL_AUTHORIZATION';
+    } else if (rawType.includes('PASSPORT')) {
+      canonicalType = 'PASSPORT';
+    }
 
     const manualFieldsOverride: Record<string, string> = {};
     if (cleanDocNum) {
@@ -74,7 +83,14 @@ export class DemoReferenceDatabaseAdapter implements IVerificationAdapter {
       manualFieldsOverride.name = cleanName;
       manualFieldsOverride.applicantName = cleanName;
     }
-    if (q.dob) manualFieldsOverride.dateOfBirth = q.dob;
+    if (q.dob) {
+      manualFieldsOverride.dateOfBirth = q.dob;
+      manualFieldsOverride.dob = q.dob;
+    }
+    if (q.gender) {
+      manualFieldsOverride.gender = q.gender;
+      manualFieldsOverride.sex = q.gender;
+    }
     if (q.countryOfIssue) manualFieldsOverride.countryOfIssue = q.countryOfIssue;
 
     // Execute through the cross-check engine

@@ -1,4 +1,5 @@
 import { ReferenceDocument } from '../types';
+import { DEMO_RAW_DOCUMENTS } from './demoReferenceAssets';
 
 export const REFERENCE_DOCUMENTS: ReferenceDocument[] = [
   {
@@ -747,3 +748,23 @@ export const REFERENCE_DOCUMENTS: ReferenceDocument[] = [
     ],
   },
 ];
+
+// Enrich REFERENCE_DOCUMENTS with svgContent and dataUrl imageUrls
+REFERENCE_DOCUMENTS.forEach((doc) => {
+  const demo = DEMO_RAW_DOCUMENTS.find(
+    (d) => d.samplePerson.docNumber === doc.docNumber || 
+           d.samplePerson.fullName.toUpperCase() === doc.personName.toUpperCase() ||
+           (doc.id === 'REF-DOC-01' && d.id === 'REF-DOC-PASSPORT-IND-01') ||
+           (doc.id === 'REF-DOC-02' && d.id === 'REF-DOC-VISA-IND-01') ||
+           (doc.id === 'REF-DOC-03' && d.id === 'REF-DOC-AADHAAR-IND-01') ||
+           (doc.id === 'REF-DOC-04' && d.id === 'REF-DOC-DL-IND-01') ||
+           (doc.id === 'REF-DOC-05' && d.id === 'REF-DOC-PERMIT-IND-01') ||
+           (doc.id === 'REF-DOC-06' && d.id === 'REF-DOC-TRAVELAUTH-TAMPERED-01')
+  );
+  if (demo) {
+    const dataUrl = `data:image/svg+xml;utf8,${encodeURIComponent(demo.svgContent)}`;
+    doc.imageUrl = dataUrl;
+    doc.rawImageUrl = dataUrl;
+    doc.svgContent = demo.svgContent;
+  }
+});

@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Database, RefreshCw, UploadCloud, CheckCircle2, AlertTriangle, ShieldCheck, 
-  FileText, Copy, Hash, Sparkles, Eye, Check, Trash2, Edit, Play, Plus, Image as ImageIcon
+  FileText, Copy, Hash, Sparkles, Eye, Check, Trash2, Edit, Play, Plus, Image as ImageIcon, RotateCcw
 } from 'lucide-react';
 import { CanonicalDocumentType, FirestoreReferenceDocument } from '../types';
 import { 
-  subscribeToReferenceDocuments, seedAllReferenceDocuments, IngestionStepProgress, 
+  subscribeToReferenceDocuments, seedAllReferenceDocuments, restartAndResetDatabase, IngestionStepProgress, 
   REFERENCE_COLLECTION_NAME, deleteReferenceDocument, saveReferenceDocument
 } from '../services/referenceDocumentService';
 import { DEMO_RAW_DOCUMENTS } from '../data/demoReferenceAssets';
@@ -85,6 +85,20 @@ export const ReferenceDatabaseView: React.FC<ReferenceDatabaseViewProps> = ({
     }
   };
 
+  const handleRestartDatabase = async () => {
+    if (window.confirm('Are you sure you want to restart the database? This will clear all existing reference records and re-seed the reference database with the new official documents and images.')) {
+      setIsSeeding(true);
+      try {
+        await restartAndResetDatabase((prog) => setIngestionProgress(prog));
+      } catch (err: any) {
+        console.error('Restart database error:', err);
+      } finally {
+        setIsSeeding(false);
+        setTimeout(() => setIngestionProgress(prev => prev?.status === 'completed' ? null : prev), 6000);
+      }
+    }
+  };
+
   const handleDelete = async (id: string) => {
     if (confirm('Are you sure you want to delete this reference document?')) {
       await deleteReferenceDocument(id);
@@ -161,6 +175,18 @@ export const ReferenceDatabaseView: React.FC<ReferenceDatabaseViewProps> = ({
                 <p className="text-sm text-slate-600 mt-1 max-w-3xl">Controlled dataset for SIH prototype testing</p>
               </div>
               <div className="flex items-center gap-3">
+                <button
+                  id="restart-database-btn"
+                  onClick={handleRestartDatabase}
+                  disabled={isSeeding}
+                  className={`inline-flex items-center px-4 py-2.5 rounded-lg text-sm font-semibold shadow-xs transition-all ${
+                    isSeeding ? 'bg-slate-100 text-slate-400' : 'bg-red-50 border border-red-200 hover:bg-red-100 text-red-700'
+                  }`}
+                  title="Purge previous documents and re-seed with latest official documents"
+                >
+                  <RotateCcw className={`w-4 h-4 mr-2 ${isSeeding ? 'animate-spin' : ''}`} />
+                  Restart Database
+                </button>
                 <button
                   onClick={() => setIsAddingDoc(true)}
                   className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold shadow-xs transition-colors"
