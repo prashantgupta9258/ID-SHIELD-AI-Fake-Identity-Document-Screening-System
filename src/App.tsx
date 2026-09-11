@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Sidebar, NavItem } from './components/Sidebar';
 import { Header } from './components/Header';
-import { ToastContainer } from './components/Toast';
 import { DashboardView } from './views/DashboardView';
 import { NewScreeningView } from './views/NewScreeningView';
 import { DocumentAnalysisView } from './views/DocumentAnalysisView';
@@ -37,16 +36,9 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // Toast Notification System
-  const [toasts, setToasts] = useState<Array<{ id: string; type: 'success' | 'warning' | 'error' | 'info'; message: string }>>([]);
-
-  const addToast = (type: 'success' | 'warning' | 'error' | 'info', message: string) => {
-    const id = `toast-${Date.now()}-${Math.random()}`;
-    setToasts((prev) => [...prev, { id, type, message }]);
-  };
-
-  const removeToast = (id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+  // Notification system disabled
+  const addToast = (_type?: 'success' | 'warning' | 'error' | 'info', _message?: string) => {
+    // Notifications disabled
   };
 
   // Handlers for cross-view navigation
@@ -258,7 +250,7 @@ export default function App() {
   const suspiciousCount = (screenings || []).filter(s => s.status === 'suspicious' || s.status === 'rejected' || s.riskScore > 35).length;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 flex font-sans antialiased selection:bg-blue-100 selection:text-blue-900">
+    <div className="h-screen bg-slate-50 text-slate-900 flex font-sans antialiased overflow-hidden selection:bg-blue-100 selection:text-blue-900">
       {/* Navigation Sidebar */}
       <Sidebar
         currentTab={currentTab}
@@ -269,25 +261,18 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
         {/* Global Application Header */}
         <Header
           pageTitle={headerInfo.title}
           breadcrumb="Bureau of Immigration • Border Security System"
           onToggleMobileMenu={() => setIsOpenMobile(!isOpenMobile)}
-          onSearchCase={handleSearchCase}
-          alerts={alerts || []}
-          onOpenAlertCase={(caseId) => {
-            const match = (screenings || []).find(s => s.caseId === caseId);
-            if (match) {
-              handleOpenInvestigation(match);
-            }
-          }}
         />
 
         {/* Dynamic Main View */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto space-y-6">
-          {currentTab === 'dashboard' && (
+        <main className="flex-1 overflow-y-auto">
+          <div className="p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto space-y-6">
+            {currentTab === 'dashboard' && (
             <DashboardView
               screenings={screenings}
               alerts={alerts}
@@ -295,6 +280,7 @@ export default function App() {
               onSelectCase={handleOpenInvestigation}
               onSelectReferenceDoc={handleInspectDocument}
               onOpenReferenceDatabase={() => setCurrentTab('reference_database')}
+              onViewAllAlerts={() => setCurrentTab('suspicious_cases')}
               onNewScreening={() => handleStartNewScreening()}
               onInspectDocument={handleInspectDocument}
               onOpenInvestigation={handleOpenInvestigation}
@@ -397,6 +383,7 @@ export default function App() {
           {currentTab === 'system_analytics' && (
             <SystemAnalyticsView />
           )}
+          </div>
         </main>
       </div>
 
@@ -411,9 +398,6 @@ export default function App() {
           handleOpenReport(rec);
         }}
       />
-
-      {/* Floating Toast Notification Stack */}
-      <ToastContainer toasts={toasts} onDismiss={removeToast} />
     </div>
   );
 }
