@@ -517,9 +517,30 @@ export const NewScreeningView: React.FC<NewScreeningViewProps> = ({
           if (data.findings) serverFindings = data.findings;
           if (typeof data.isDbMatch === 'boolean') isDbMatch = data.isDbMatch;
           if (data.matchConfidence) matchConfidence = data.matchConfidence;
+        } else {
+          isDbMatch = matchResult.matched;
+          matchConfidence = matchResult.confidence;
+          serverFindings = matchResult.matched ? [] : [{
+            id: 'FINDING-DB-NOT-FOUND',
+            severity: 'critical',
+            category: 'database_mismatch',
+            title: 'Document Not Found in Official Database',
+            description: 'The uploaded credential was cross-checked against official database records and no authentic match was found.',
+            evidence: 'Document number or holder identity not present in official database.'
+          }];
         }
       } catch (e) {
-        console.warn("Screening API local match evaluation");
+        console.warn("Screening API local match evaluation fallback");
+        isDbMatch = matchResult.matched;
+        matchConfidence = matchResult.confidence;
+        serverFindings = matchResult.matched ? [] : [{
+          id: 'FINDING-DB-NOT-FOUND',
+          severity: 'critical',
+          category: 'database_mismatch',
+          title: 'Document Not Found in Official Database',
+          description: 'The uploaded credential was cross-checked against official database records and no authentic match was found.',
+          evidence: 'Document number or holder identity not present in official database.'
+        }];
       }
 
       return { matchResult, comparisonList, serverFindings, isDbMatch, matchConfidence };
