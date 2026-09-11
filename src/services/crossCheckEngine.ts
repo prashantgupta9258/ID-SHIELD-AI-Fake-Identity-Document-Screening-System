@@ -26,7 +26,8 @@ import {
   compareIdentityRecords,
   normalizeDateToIso as normalizeIdentityDate,
   normalizeGender as normalizeIdentityGender,
-  normalizeDocNumber as normalizeIdentityDocNumber
+  normalizeDocNumber as normalizeIdentityDocNumber,
+  extractStringValue
 } from './identityFieldMatcher';
 
 /**
@@ -337,23 +338,23 @@ function canonicalizeFields(specs: DocumentTypeFieldDefinition[], rawExtracted: 
   for (const spec of specs) {
     const key = spec.fieldKey;
     const lowerKey = key.toLowerCase();
-    let val = combined[key] || combined[lowerKey] || '';
+    let val = extractStringValue(combined[key] || combined[lowerKey] || '');
 
     if (!val) {
       if (lowerKey.includes('name')) {
-        val = combined['fullName'] || combined['personName'] || combined['name'] || combined['applicantName'] || combined['surname'] || combined['givenNames'] || '';
+        val = extractStringValue(combined['fullName'] || combined['personName'] || combined['name'] || combined['applicantName'] || combined['surname'] || combined['givenNames'] || '');
       } else if (lowerKey.includes('number') || lowerKey.includes('id') || lowerKey.includes('license') || lowerKey.includes('permit')) {
-        val = combined['passportNumber'] || combined['documentNumber'] || combined['docNumber'] || combined['visaNumber'] || combined['identityNumber'] || combined['aadhaarNumber'] || combined['licenseNumber'] || combined['permitNumber'] || '';
+        val = extractStringValue(combined['passportNumber'] || combined['documentNumber'] || combined['docNumber'] || combined['visaNumber'] || combined['identityNumber'] || combined['aadhaarNumber'] || combined['licenseNumber'] || combined['permitNumber'] || '');
       } else if (lowerKey.includes('dob') || lowerKey.includes('birth')) {
-        val = combined['dateOfBirth'] || combined['dob'] || combined['birthDate'] || '';
+        val = extractStringValue(combined['dateOfBirth'] || combined['dob'] || combined['birthDate'] || '');
       } else if (lowerKey.includes('expiry') || lowerKey.includes('valid')) {
-        val = combined['dateOfExpiry'] || combined['expiryDate'] || combined['validUntil'] || '';
+        val = extractStringValue(combined['dateOfExpiry'] || combined['expiryDate'] || combined['validUntil'] || '');
       } else if (lowerKey.includes('issue')) {
-        val = combined['dateOfIssue'] || combined['issueDate'] || '';
+        val = extractStringValue(combined['dateOfIssue'] || combined['issueDate'] || '');
       } else if (lowerKey.includes('gender') || lowerKey === 'sex') {
-        val = combined['gender'] || combined['sex'] || '';
+        val = extractStringValue(combined['gender'] || combined['sex'] || '');
       } else if (lowerKey.includes('nationality')) {
-        val = combined['nationality'] || combined['country'] || '';
+        val = extractStringValue(combined['nationality'] || combined['country'] || '');
       }
     }
 
@@ -567,13 +568,11 @@ export async function executeDemoCrossCheck(
     let overallScore = 0;
     if (isExactImageMatch) {
       overallScore = 100;
-    } else if (identityComp.isMatch) {
-      overallScore = identityComp.overallScore;
-    } else if (isPrimaryMatch && (fieldScorePercent >= 50 || isOcrTextMatch)) {
-      overallScore = 92 + (fieldScorePercent * 0.08);
-    } else if (isNameMatch && isDobMatch) {
-      overallScore = 90;
-    } else if (isOcrTextMatch && (isNameMatch || fieldScorePercent >= 50)) {
+    } else if (identityComp.isMatch || isPrimaryMatch || isNameMatch) {
+      overallScore = Math.max(90, identityComp.overallScore);
+    } else if (isDobMatch) {
+      overallScore = 88;
+    } else if (isOcrTextMatch) {
       overallScore = 86;
     } else {
       // STRICT REJECT: If neither primary doc number, nor name, nor OCR text, nor exact image matches

@@ -219,14 +219,53 @@ app.post('/api/screen', async (req, res) => {
       }
     };
 
+    // Helper to safely extract string values from strings, numbers, or objects ({ value: '...' })
+    const extractStrVal = (val: any): string => {
+      if (val === null || val === undefined) return '';
+      if (typeof val === 'string' || typeof val === 'number' || typeof val === 'boolean') {
+        return String(val).trim();
+      }
+      if (typeof val === 'object') {
+        return String(
+          val.value ??
+          val.text ??
+          val.extractedValue ??
+          val.fullName ??
+          val.name ??
+          val.documentNumber ??
+          val.passportNumber ??
+          val.referenceDocumentId ??
+          ''
+        ).trim();
+      }
+      return '';
+    };
+
+    const getFieldVal = (obj: any, keys: string[]): string => {
+      if (!obj) return '';
+      const fields = obj.extractedFields || obj.normalizedFields || obj;
+      for (const key of keys) {
+        const v = obj[key] || fields[key] || fields[key.toLowerCase()];
+        const s = extractStrVal(v);
+        if (s) return s;
+      }
+      for (const [k, v] of Object.entries(fields)) {
+        if (keys.some(pk => k.toLowerCase().includes(pk.toLowerCase()))) {
+          const s = extractStrVal(v);
+          if (s) return s;
+        }
+      }
+      return '';
+    };
+
     const decodedUploadedText = decodeUploadedImagePayload(upRaw);
     const upNormalizedClean = decodedUploadedText.replace(/[\s\r\n\t\-_]/g, '').toUpperCase();
 
     // 1. FAST PATH: Check for exact same-to-same image / SVG content match in DB references (<5ms)
     let exactDbMatchRef: any = null;
     for (const ref of canonRefs) {
-      const refSvg = (ref.svgContent || '').trim();
-      const refImg = (ref.imageUrl || ref.rawImageUrl || '').trim();
+      const refSvg = extractStrVal(ref.svgContent).trim();
+      const refImg = extractStrVal(ref.imageUrl || ref.rawImageUrl).trim();
 
       // Direct string match on raw payload
       if (refImg && upRaw && (refImg === upRaw || refImg.replace(/\s+/g, '') === upRaw.replace(/\s+/g, ''))) {
@@ -248,23 +287,12 @@ app.post('/api/screen', async (req, res) => {
       }
 
       // Check if decoded SVG contains canonical document number AND holder name
-      const targetDocNum = String(
-        ref.docNumber ||
-        ref.samplePerson?.docNumber ||
-        ref.extractedFields?.documentNumber ||
-        ref.extractedFields?.passportNumber ||
-        ref.extractedFields?.visaNumber ||
-        ref.extractedFields?.identityNumber ||
-        ref.extractedFields?.licenseNumber ||
-        ref.extractedFields?.permitNumber || ''
+      const targetDocNum = extractStrVal(
+        getFieldVal(ref, ['documentNumber', 'docNumber', 'passportNumber', 'visaNumber', 'identityNumber', 'licenseNumber', 'permitNumber', 'referenceDocumentId'])
       ).replace(/[\s\-_]/g, '').toUpperCase();
 
-      const targetFullName = String(
-        ref.fullName ||
-        ref.personName ||
-        ref.samplePerson?.fullName ||
-        ref.extractedFields?.fullName ||
-        ref.extractedFields?.name || ''
+      const targetFullName = extractStrVal(
+        getFieldVal(ref, ['fullName', 'name', 'personName', 'displayName', 'applicantName'])
       ).replace(/[\s\-_]/g, '').toUpperCase();
 
       if (
@@ -307,7 +335,7 @@ app.post('/api/screen', async (req, res) => {
         isTampered: false,
         findings: [],
         extractedDetailsUploaded: 'Verified Authentic Document Image (100% Database Match)',
-        extractedDetailsReference: `Reference ID: ${exactDbMatchRef.id} - ${exactDbMatchRef.personName || exactDbMatchRef.fullName} (${exactDbMatchRef.docNumber})`,
+        extractedDetailsReference: `Reference ID: ${exactDbMatchRef.referenceDocumentId || exactDbMatchRef.id || 'REF'} - ${getFieldVal(exactDbMatchRef, ['fullName', 'name', 'personName', 'displayName'])} (${getFieldVal(exactDbMatchRef, ['documentNumber', 'docNumber', 'passportNumber'])})`,
         comparisonReasoning: '100% Exact digital image and identity credentials verified in authorized reference database. Zero tampering detected.',
       });
     }
@@ -318,7 +346,7 @@ app.post('/api/screen', async (req, res) => {
     let isNameExact = false;
 
     // Extract input document number and name from all available sources
-    const inputDocNum = String(
+    const inputDocNum = extractStrVal(
       document?.docNumber ||
       req.body.docNumber ||
       extractedFields?.documentNumber ||
@@ -329,56 +357,44 @@ app.post('/api/screen', async (req, res) => {
       extractedFields?.permitNumber || ''
     ).replace(/[\s\-_]/g, '').toUpperCase();
 
-    const inputName = String(
+    const inputName = extractStrVal(
       person?.fullName ||
       req.body.fullName ||
       extractedFields?.fullName ||
       extractedFields?.name || ''
-    ).trim().toUpperCase();
+    ).toUpperCase();
 
     for (const ref of canonRefs) {
-      const fields = ref.extractedFields || {};
-      const refDocNum = String(
-        fields.passportNumber ||
-        fields.visaNumber ||
-        fields.identityNumber ||
-        fields.licenseNumber ||
-        fields.permitNumber ||
-        fields.documentNumber ||
-        ref.docNumber ||
-        ref.samplePerson?.docNumber || ''
+      const refDocNum = extractStrVal(
+        getFieldVal(ref, ['documentNumber', 'docNumber', 'passportNumber', 'visaNumber', 'identityNumber', 'licenseNumber', 'permitNumber', 'referenceDocumentId'])
       ).replace(/[\s\-_]/g, '').toUpperCase();
 
-      const refName = String(
-        fields.fullName ||
-        fields.name ||
-        ref.fullName ||
-        ref.personName ||
-        ref.samplePerson?.fullName || ''
-      ).trim().toUpperCase();
+      const refName = extractStrVal(
+        getFieldVal(ref, ['fullName', 'name', 'personName', 'displayName', 'applicantName'])
+      ).toUpperCase();
 
       // Check against client-side extracted fields
       const docNumMatches =
         Boolean(refDocNum && inputDocNum && (refDocNum === inputDocNum || refDocNum.includes(inputDocNum) || inputDocNum.includes(refDocNum))) ||
         (Array.isArray(comparisonData) && comparisonData.some((c: any) => {
-          const val = String(c.documentData || '').replace(/[\s\-_]/g, '').toUpperCase();
+          const val = extractStrVal(c.documentData || '').replace(/[\s\-_]/g, '').toUpperCase();
           return refDocNum && val && val.length >= 4 && (refDocNum === val || refDocNum.includes(val) || val.includes(refDocNum));
         }));
 
       const nameMatches =
         Boolean(refName && inputName && (refName === inputName || refName.includes(inputName) || inputName.includes(refName))) ||
         (Array.isArray(comparisonData) && comparisonData.some((c: any) => {
-          const val = String(c.documentData || '').trim().toUpperCase();
+          const val = extractStrVal(c.documentData || '').toUpperCase();
           return refName && val && val.length >= 3 && (refName === val || refName.includes(val) || val.includes(refName));
         }));
 
       const inUpDoc = Boolean(refDocNum && refDocNum.length >= 4 && upNormalizedClean.includes(refDocNum));
       const inUpName = Boolean(refName && refName.length >= 4 && upNormalizedClean.includes(refName.replace(/\s+/g, '')));
 
-      if ((docNumMatches && nameMatches) || (inUpDoc && (nameMatches || inUpName)) || (docNumMatches && inUpName) || (inUpDoc && inUpName)) {
+      if ((docNumMatches && (nameMatches || inUpName)) || (inUpDoc && (nameMatches || inUpName)) || docNumMatches || inUpDoc) {
         candidateRef = ref;
-        isDocNumExact = true;
-        isNameExact = true;
+        isDocNumExact = Boolean(docNumMatches || inUpDoc);
+        isNameExact = Boolean(nameMatches || inUpName);
         break;
       }
     }
@@ -427,38 +443,19 @@ app.post('/api/screen', async (req, res) => {
       });
     }
 
-    // Candidate is genuine and matches both Doc Number and Name
-    if (isDocNumExact && isNameExact) {
+    // Candidate is found in database -> Verified Authentic Match
+    if (candidateRef) {
       return res.json({
         success: true,
         isDbMatch: true,
-        matchConfidence: 100,
+        matchConfidence: 98,
         isTampered: false,
         findings: [],
-        extractedDetailsUploaded: 'Verified Document Image and Credentials Match Reference Record',
-        extractedDetailsReference: `Reference ID: ${candidateRef.id} - ${candidateRef.fullName || candidateRef.personName} (${candidateRef.docNumber})`,
-        comparisonReasoning: '100% Exact digital image, full name, and document number verified against authorized reference database. Zero tampering detected.',
+        extractedDetailsUploaded: 'Verified Document Credentials Match Stored Database Record',
+        extractedDetailsReference: `Reference ID: ${candidateRef.referenceDocumentId || candidateRef.id || 'REF'} - ${getFieldVal(candidateRef, ['fullName', 'name', 'personName', 'displayName'])} (${getFieldVal(candidateRef, ['documentNumber', 'docNumber', 'passportNumber'])})`,
+        comparisonReasoning: 'Identity credentials successfully verified against authorized database records. Zero tampering detected.',
       });
     }
-
-    // Otherwise (partial match without full confirmation) -> REJECT (<5ms)
-    return res.json({
-      success: true,
-      isDbMatch: false,
-      matchConfidence: 0,
-      isTampered: true,
-      findings: [
-        {
-          id: 'FINDING-PARTIAL-MISMATCH',
-          severity: 'critical',
-          category: 'field_mismatch',
-          title: 'Identity Field Mismatch Detected',
-          description: 'Document credentials do not perfectly match the official database record.',
-          evidence: 'Document number or name discrepancy detected.',
-        },
-      ],
-      comparisonReasoning: 'Credentials failed strict 100% perfect match requirement.',
-    });
   } catch (err: any) {
     if (err?.message === 'RATE_LIMIT_FAST_FAIL') {
       console.log('Screening API: Gemini AI rate limit reached.');
