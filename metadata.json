@@ -1,0 +1,6 @@
+{
+  "name": "ID-SHIELD AI: Fake Identity & Document Screening System",
+  "description": "AI-based immigration and border security screening platform for detecting fake identities, document tampering, forged visas, and photo alterations.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

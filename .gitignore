@@ -1,0 +1,16 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+fix_*.cjs
+replace_*.js
+replace_*.cjs
+update_*.cjs
+clean_*.cjs
+simplify_*.cjs
+test-*.html
+
